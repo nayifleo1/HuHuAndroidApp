@@ -1,0 +1,422 @@
+import { stremioService, Meta, Manifest } from './stremioService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
+
+export interface StreamingAddon {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  types: string[];
+  catalogs: {
+    type: string;
+    id: string;
+    name: string;
+  }[];
+  resources: {
+    name: string;
+    types: string[];
+    idPrefixes?: string[];
+  }[];
+  transportUrl?: string;
+  transportName?: string;
+}
+
+export interface StreamingContent {
+  id: string;
+  type: string;
+  name: string;
+  poster: string;
+  posterShape?: string;
+  banner?: string;
+  logo?: string;
+  imdbRating?: string;
+  year?: number;
+  genres?: string[];
+  description?: string;
+  runtime?: string;
+  released?: string;
+  trailerStreams?: any[];
+  videos?: any[];
+  inLibrary?: boolean;
+}
+
+export interface CatalogContent {
+  addon: string;
+  type: string;
+  id: string;
+  name: string;
+  genre?: string;
+  items: StreamingContent[];
+}
+
+class CatalogService {
+  private static instance: CatalogService;
+  private readonly LIBRARY_KEY = 'stremio-library';
+  private readonly RECENT_CONTENT_KEY = 'stremio-recent-content';
+  private library: Record<string, StreamingContent> = {};
+  private recentContent: StreamingContent[] = [];
+  private readonly MAX_RECENT_ITEMS = 20;
+
+  private constructor() {
+    this.loadLibrary();
+    this.loadRecentContent();
+  }
+
+  static getInstance(): CatalogService {
+    if (!CatalogService.instance) {
+      CatalogService.instance = new CatalogService();
+    }
+    return CatalogService.instance;
+  }
+
+  private async loadLibrary(): Promise<void> {
+    try {
+      const storedLibrary = await AsyncStorage.getItem(this.LIBRARY_KEY);
+      if (storedLibrary) {
+        this.library = JSON.parse(storedLibrary);
+      }
+    } catch (error) {
+      console.error('Failed to load library:', error);
+    }
+  }
+
+  private async saveLibrary(): Promise<void> {
+    try {
+      await AsyncStorage.setItem(this.LIBRARY_KEY, JSON.stringify(this.library));
+    } catch (error) {
+      console.error('Failed to save library:', error);
+    }
+  }
+
+  private async loadRecentContent(): Promise<void> {
+    try {
+      const storedRecentContent = await AsyncStorage.getItem(this.RECENT_CONTENT_KEY);
+      if (storedRecentContent) {
+        this.recentContent = JSON.parse(storedRecentContent);
+      }
+    } catch (error) {
+      console.error('Failed to load recent content:', error);
+    }
+  }
+
+  private async saveRecentContent(): Promise<void> {
+    try {
+      await AsyncStorage.setItem(this.RECENT_CONTENT_KEY, JSON.stringify(this.recentContent));
+    } catch (error) {
+      console.error('Failed to save recent content:', error);
+    }
+  }
+
+  async getAllAddons(): Promise<StreamingAddon[]> {
+    const addons = stremioService.getInstalledAddons();
+    return addons.map(addon => this.convertManifestToStreamingAddon(addon));
+  }
+
+  private convertManifestToStreamingAddon(manifest: Manifest): StreamingAddon {
+    return {
+      id: manifest.id,
+      name: manifest.name,
+      version: manifest.version,
+      description: manifest.description,
+      types: manifest.types || [],
+      catalogs: manifest.catalogs || [],
+      resources: manifest.resources || [],
+      transportUrl: manifest.url,
+      transportName: manifest.name
+    };
+  }
+
+  async getHomeCatalogs(): Promise<CatalogContent[]> {
+    const addons = await this.getAllAddons();
+    const catalogs: CatalogContent[] = [];
+
+    // Get featured catalogs
+    for (const addon of addons) {
+      if (addon.catalogs && addon.catalogs.length > 0) {
+        // For Cinemeta, include more catalogs
+        const maxCatalogs = addon.id === 'com.linvo.cinemeta' ? 6 : 2;
+        const addonCatalogs = addon.catalogs.slice(0, maxCatalogs);
+
+        for (const catalog of addonCatalogs) {
+          try {
+            // Get the items for this catalog
+            const addonManifest = stremioService.getInstalledAddons().find(a => a.id === addon.id);
+            if (!addonManifest) continue;
+
+            const metas = await stremioService.getCatalog(addonManifest, catalog.type, catalog.id, 1);
+            if (metas && metas.length > 0) {
+              // Convert Meta to StreamingContent
+              const items = metas.map(meta => this.convertMetaToStreamingContent(meta));
+              
+              // Format the catalog name to include the content type
+              let displayName = catalog.name;
+              if (addon.id === 'com.linvo.cinemeta') {
+                const contentType = catalog.type === 'movie' ? 'Movies' : 'TV Shows';
+                // Check if the name already includes the content type
+                if (!displayName.includes(contentType)) {
+                  displayName = `${displayName} ${contentType}`;
+                }
+              }
+              
+              catalogs.push({
+                addon: addon.id,
+                type: catalog.type,
+                id: catalog.id,
+                name: displayName,
+                items
+              });
+            }
+          } catch (error) {
+            console.error(`Failed to get catalog ${catalog.id} for addon ${addon.id}:`, error);
+          }
+        }
+      }
+    }
+
+    return catalogs;
+  }
+
+  async getCatalogByType(type: string, genreFilter?: string): Promise<CatalogContent[]> {
+    const addons = await this.getAllAddons();
+    const catalogs: CatalogContent[] = [];
+
+    // Filter addons with catalogs of the specified type
+    const typeAddons = addons.filter(addon => 
+      addon.catalogs && addon.catalogs.some(catalog => catalog.type === type)
+    );
+
+    for (const addon of typeAddons) {
+      const typeCatalogs = addon.catalogs.filter(catalog => catalog.type === type);
+
+      for (const catalog of typeCatalogs) {
+        try {
+          const addonManifest = stremioService.getInstalledAddons().find(a => a.id === addon.id);
+          if (!addonManifest) continue;
+
+          // Apply genre filter if provided
+          const filters = genreFilter ? [{ title: 'genre', value: genreFilter }] : [];
+          const metas = await stremioService.getCatalog(addonManifest, type, catalog.id, 1, filters);
+          
+          if (metas && metas.length > 0) {
+            const items = metas.map(meta => this.convertMetaToStreamingContent(meta));
+            
+            catalogs.push({
+              addon: addon.id,
+              type,
+              id: catalog.id,
+              name: catalog.name,
+              genre: genreFilter,
+              items
+            });
+          }
+        } catch (error) {
+          console.error(`Failed to get catalog ${catalog.id} for addon ${addon.id}:`, error);
+        }
+      }
+    }
+
+    return catalogs;
+  }
+
+  async getContentDetails(type: string, id: string): Promise<StreamingContent | null> {
+    try {
+      // Try up to 3 times with increasing delays
+      let meta = null;
+      let lastError = null;
+      
+      for (let i = 0; i < 3; i++) {
+        try {
+          meta = await stremioService.getMetaDetails(type, id);
+          if (meta) break;
+          await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i)));
+        } catch (error) {
+          lastError = error;
+          console.error(`Attempt ${i + 1} failed to get content details for ${type}:${id}:`, error);
+          await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i)));
+        }
+      }
+
+      if (meta) {
+        // Add to recent content
+        const content = this.convertMetaToStreamingContent(meta);
+        this.addToRecentContent(content);
+        
+        // Check if it's in the library
+        content.inLibrary = this.library[`${type}:${id}`] !== undefined;
+        
+        return content;
+      }
+
+      if (lastError) {
+        throw lastError;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error(`Failed to get content details for ${type}:${id}:`, error);
+      return null;
+    }
+  }
+
+  private convertMetaToStreamingContent(meta: Meta): StreamingContent {
+    return {
+      id: meta.id,
+      type: meta.type,
+      name: meta.name,
+      poster: meta.poster || 'https://via.placeholder.com/300x450/cccccc/666666?text=No+Image',
+      posterShape: 'poster',
+      banner: meta.background,
+      logo: `https://images.metahub.space/logo/medium/${meta.id}/img`,
+      imdbRating: meta.imdbRating,
+      year: meta.year,
+      genres: meta.genres,
+      description: meta.description,
+      runtime: meta.runtime,
+      inLibrary: this.library[`${meta.type}:${meta.id}`] !== undefined
+    };
+  }
+
+  addToLibrary(content: StreamingContent): void {
+    const key = `${content.type}:${content.id}`;
+    this.library[key] = content;
+    this.saveLibrary();
+  }
+
+  removeFromLibrary(type: string, id: string): void {
+    const key = `${type}:${id}`;
+    if (this.library[key]) {
+      delete this.library[key];
+      this.saveLibrary();
+    }
+  }
+
+  getLibraryItems(): StreamingContent[] {
+    return Object.values(this.library);
+  }
+
+  private addToRecentContent(content: StreamingContent): void {
+    // Remove if it already exists to prevent duplicates
+    this.recentContent = this.recentContent.filter(item => 
+      !(item.id === content.id && item.type === content.type)
+    );
+    
+    // Add to the beginning of the array
+    this.recentContent.unshift(content);
+    
+    // Trim the array if it exceeds the maximum
+    if (this.recentContent.length > this.MAX_RECENT_ITEMS) {
+      this.recentContent = this.recentContent.slice(0, this.MAX_RECENT_ITEMS);
+    }
+    
+    this.saveRecentContent();
+  }
+
+  getRecentContent(): StreamingContent[] {
+    return this.recentContent;
+  }
+
+  async searchContent(query: string): Promise<StreamingContent[]> {
+    if (!query || query.trim().length < 2) {
+      return [];
+    }
+
+    const addons = await this.getAllAddons();
+    const results: StreamingContent[] = [];
+    const searchPromises: Promise<void>[] = [];
+
+    for (const addon of addons) {
+      if (addon.catalogs && addon.catalogs.length > 0) {
+        for (const catalog of addon.catalogs) {
+          const addonManifest = stremioService.getInstalledAddons().find(a => a.id === addon.id);
+          if (!addonManifest) continue;
+
+          const searchPromise = (async () => {
+            try {
+              const filters = [{ title: 'search', value: query }];
+              const metas = await stremioService.getCatalog(addonManifest, catalog.type, catalog.id, 1, filters);
+              
+              if (metas && metas.length > 0) {
+                const items = metas.map(meta => this.convertMetaToStreamingContent(meta));
+                results.push(...items);
+              }
+            } catch (error) {
+              console.error(`Search failed for ${catalog.id} in addon ${addon.id}:`, error);
+            }
+          })();
+          
+          searchPromises.push(searchPromise);
+        }
+      }
+    }
+
+    await Promise.all(searchPromises);
+
+    // Remove duplicates based on id and type
+    const uniqueResults = Array.from(
+      new Map(results.map(item => [`${item.type}:${item.id}`, item])).values()
+    );
+
+    return uniqueResults;
+  }
+
+  async searchContentCinemeta(query: string): Promise<StreamingContent[]> {
+    if (!query || query.trim().length < 2) {
+      return [];
+    }
+
+    const trimmedQuery = query.trim();
+    console.log('Searching Cinemeta for:', trimmedQuery);
+
+    const addons = await this.getAllAddons();
+    const results: StreamingContent[] = [];
+
+    // Find Cinemeta addon by its ID
+    const cinemeta = addons.find(addon => addon.id === 'com.linvo.cinemeta');
+    
+    if (!cinemeta || !cinemeta.catalogs) {
+      console.error('Cinemeta addon not found. Available addons:', addons.map(a => ({ id: a.id, url: a.transportUrl })));
+      return [];
+    }
+
+    console.log('Found Cinemeta addon:', cinemeta.id);
+
+    // Search in both movie and series catalogs simultaneously
+    const searchPromises = ['movie', 'series'].map(async (type) => {
+      try {
+        console.log(`Searching ${type} catalog with query:`, trimmedQuery);
+        
+        // Direct API call to Cinemeta
+        const url = `https://v3-cinemeta.strem.io/catalog/${type}/top/search=${encodeURIComponent(trimmedQuery)}.json`;
+        console.log('Request URL:', url);
+        
+        const response = await axios.get<{ metas: Meta[] }>(url);
+        const metas = response.data.metas || [];
+        
+        console.log(`Found ${metas.length} results for ${type}`);
+        
+        if (metas && metas.length > 0) {
+          const items = metas.map(meta => this.convertMetaToStreamingContent(meta));
+          results.push(...items);
+        }
+      } catch (error) {
+        console.error(`Cinemeta search failed for ${type}:`, error);
+      }
+    });
+
+    await Promise.all(searchPromises);
+
+    console.log('Total results found:', results.length);
+
+    // Sort results by name and ensure uniqueness
+    const uniqueResults = Array.from(
+      new Map(results.map(item => [`${item.type}:${item.id}`, item])).values()
+    );
+    uniqueResults.sort((a, b) => a.name.localeCompare(b.name));
+
+    return uniqueResults;
+  }
+}
+
+export const catalogService = CatalogService.getInstance();
+export default catalogService; 
