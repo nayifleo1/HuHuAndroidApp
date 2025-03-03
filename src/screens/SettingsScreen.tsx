@@ -23,6 +23,7 @@ export interface AppSettings {
   enableSubtitles: boolean;
   enableBackgroundPlayback: boolean;
   cacheLimit: number; // In MB
+  useExternalPlayer: boolean; // Whether to use external player when available
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -32,6 +33,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   enableSubtitles: true,
   enableBackgroundPlayback: false,
   cacheLimit: 1024, // 1GB
+  useExternalPlayer: false, // Default to internal player
 };
 
 const SETTINGS_STORAGE_KEY = 'app_settings';
@@ -194,6 +196,19 @@ const SettingsScreen: React.FC = () => {
               </Text>
               <MaterialIcons name="arrow-drop-down" size={20} color={isDarkMode ? colors.white : colors.black} />
             </TouchableOpacity>
+          )
+        )}
+        {renderSettingItem(
+          'External Player',
+          'Use external video player when available',
+          'open-in-new',
+          () => (
+            <Switch
+              value={settings.useExternalPlayer}
+              onValueChange={(value) => updateSetting('useExternalPlayer', value)}
+              trackColor={{ false: '#767577', true: colors.primary }}
+              thumbColor={settings.useExternalPlayer ? colors.white : '#f4f3f4'}
+            />
           )
         )}
         {renderSettingItem(
