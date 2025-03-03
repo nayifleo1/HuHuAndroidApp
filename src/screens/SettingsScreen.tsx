@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,69 +14,13 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { colors } from '../styles/colors';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-export interface AppSettings {
-  enableDarkMode: boolean;
-  enableNotifications: boolean;
-  streamQuality: 'auto' | 'low' | 'medium' | 'high';
-  enableSubtitles: boolean;
-  enableBackgroundPlayback: boolean;
-  cacheLimit: number; // In MB
-  useExternalPlayer: boolean; // Whether to use external player when available
-}
-
-const DEFAULT_SETTINGS: AppSettings = {
-  enableDarkMode: false,
-  enableNotifications: true,
-  streamQuality: 'auto',
-  enableSubtitles: true,
-  enableBackgroundPlayback: false,
-  cacheLimit: 1024, // 1GB
-  useExternalPlayer: false, // Default to internal player
-};
-
-const SETTINGS_STORAGE_KEY = 'app_settings';
+import { useSettings, DEFAULT_SETTINGS, AppSettings } from '../hooks/useSettings';
 
 const SettingsScreen: React.FC = () => {
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const { settings, updateSetting } = useSettings();
   const systemColorScheme = useColorScheme();
   const isDarkMode = systemColorScheme === 'dark' || settings.enableDarkMode;
   const navigation = useNavigation();
-
-  // Load settings on mount
-  React.useEffect(() => {
-    loadSettings();
-  }, []);
-
-  const loadSettings = async () => {
-    try {
-      const storedSettings = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY);
-      if (storedSettings) {
-        setSettings(JSON.parse(storedSettings));
-      }
-    } catch (error) {
-      console.error('Failed to load settings:', error);
-    }
-  };
-
-  const saveSettings = async (newSettings: AppSettings) => {
-    try {
-      await AsyncStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(newSettings));
-      setSettings(newSettings);
-    } catch (error) {
-      console.error('Failed to save settings:', error);
-      Alert.alert('Error', 'Failed to save settings');
-    }
-  };
-
-  const updateSetting = useCallback(<K extends keyof AppSettings>(
-    key: K,
-    value: AppSettings[K]
-  ) => {
-    const newSettings = { ...settings, [key]: value };
-    saveSettings(newSettings);
-  }, [settings]);
 
   const handleClearCache = useCallback(() => {
     Alert.alert(
@@ -106,12 +50,14 @@ const SettingsScreen: React.FC = () => {
           text: 'Reset',
           style: 'destructive',
           onPress: () => {
-            saveSettings(DEFAULT_SETTINGS);
+            (Object.keys(DEFAULT_SETTINGS) as Array<keyof typeof DEFAULT_SETTINGS>).forEach(key => {
+              updateSetting(key, DEFAULT_SETTINGS[key]);
+            });
           }
         }
       ]
     );
-  }, []);
+  }, [updateSetting]);
 
   const renderSectionHeader = (title: string) => (
     <View style={styles.sectionHeader}>
@@ -407,4 +353,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default SettingsScreen; 
+export default SettingsScreen;

@@ -25,6 +25,8 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import FastImage from '@d11/react-native-fast-image';
 import { colors } from '../styles/colors';
+import { useSettings } from '../hooks/useSettings';
+import { VideoPlayerService } from '../services/videoPlayerService';
 
 interface RouteParams {
   id: string;
@@ -117,6 +119,7 @@ type RootStackParamList = {
 };
 
 const MetadataScreen = () => {
+  const { settings } = useSettings();
   const route = useRoute<RouteProp<Record<string, RouteParams>, string>>();
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const isDarkMode = useColorScheme() === 'dark';
@@ -628,16 +631,34 @@ const MetadataScreen = () => {
     );
   }, [metadata, selectedEpisode, isDarkMode, handleEpisodeSelect]);
 
-  const handlePlayStream = (stream: Stream) => {
-    navigation.navigate('Player', {
-      id,
-      type,
-      title: metadata?.name,
-      poster: metadata?.poster,
-      stream: stream.url,
-      headers: stream.headers,
-      subtitles: stream.subtitles
-    });
+  const handlePlayStream = async (stream: Stream) => {
+    if (settings.useExternalPlayer) {
+      try {
+        await VideoPlayerService.playVideo(stream.url);
+      } catch (error) {
+        console.error('Failed to play in external player:', error);
+        // Fallback to internal player
+        navigation.navigate('Player', {
+          id,
+          type,
+          title: metadata?.name,
+          poster: metadata?.poster,
+          stream: stream.url,
+          headers: stream.headers,
+          subtitles: stream.subtitles
+        });
+      }
+    } else {
+      navigation.navigate('Player', {
+        id,
+        type,
+        title: metadata?.name,
+        poster: metadata?.poster,
+        stream: stream.url,
+        headers: stream.headers,
+        subtitles: stream.subtitles
+      });
+    }
   };
 
   const toggleLibrary = () => {
@@ -2295,4 +2316,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default MetadataScreen; 
+export default MetadataScreen;
