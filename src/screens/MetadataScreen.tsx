@@ -653,14 +653,29 @@ const MetadataScreen = () => {
     } else {
       try {
         // Try to use native ExoPlayer
-        const subtitles = stream.subtitles && stream.subtitles.length > 0 ? stream.subtitles[0] : undefined;
-        await VideoPlayerService.playVideo(stream.url, {
+        console.log('Stream data:', JSON.stringify(stream, null, 2));
+        
+        // Pass all available subtitles and headers to the player
+        const options: any = {
           useExternalPlayer: false,
           title: metadata?.name,
           poster: metadata?.poster,
-          subtitleUrl: subtitles?.url,
-          subtitleLanguage: subtitles?.lang
-        });
+        };
+        
+        // Add subtitle if available
+        if (stream.subtitles && stream.subtitles.length > 0) {
+          options.subtitleUrl = stream.subtitles[0].url;
+          options.subtitleLanguage = stream.subtitles[0].lang;
+          console.log('Using subtitle:', options.subtitleUrl, options.subtitleLanguage);
+        }
+        
+        // Add headers if available
+        if (stream.headers) {
+          options.headers = stream.headers;
+          console.log('Using headers:', JSON.stringify(options.headers, null, 2));
+        }
+        
+        await VideoPlayerService.playVideo(stream.url, options);
       } catch (error) {
         console.error('Failed to play with ExoPlayer:', error);
         // Fallback to React Native Video player

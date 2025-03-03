@@ -13,4 +13,6 @@
     <string name="exo_player_speed">Playback Speed</string>
     <string name="exo_player_error">Error</string>
     <string name="exo_player_loading">Loading…</string>
+    <string name="exo_player_audio_track">Audio Track</string>
+    <string name="exo_player_aspect_ratio">Aspect Ratio</string>
 </resources>

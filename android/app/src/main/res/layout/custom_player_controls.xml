@@ -124,10 +124,14 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
             android:layout_marginEnd="8dp"
-            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintBottom_toTopOf="@+id/controls_row"
             app:layout_constraintEnd_toStartOf="@+id/exo_duration"
             app:layout_constraintStart_toEndOf="@+id/exo_position"
-            app:layout_constraintTop_toTopOf="parent" />
+            app:layout_constraintTop_toTopOf="parent"
+            app:played_color="#E50914"
+            app:scrubber_color="#E50914"
+            app:scrubber_dragged_size="20dp"
+            app:scrubber_enabled_size="16dp" />
 
         <TextView
             android:id="@+id/exo_duration"
@@ -135,45 +139,70 @@
             android:layout_height="wrap_content"
             android:textColor="@android:color/white"
             app:layout_constraintBottom_toBottomOf="@+id/exo_progress"
-            app:layout_constraintEnd_toStartOf="@+id/exo_fullscreen"
+            app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toTopOf="@+id/exo_progress"
             tools:text="10:00" />
-
-        <ImageButton
-            android:id="@+id/exo_fullscreen"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_marginStart="16dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/exo_player_fullscreen"
-            android:src="@drawable/ic_fullscreen"
+            
+        <!-- Controls row below the progress bar -->
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/controls_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/exo_subtitle"
-            app:layout_constraintTop_toTopOf="parent" />
-
-        <ImageButton
-            android:id="@+id/exo_subtitle"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_marginStart="8dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/exo_player_subtitles"
-            android:src="@drawable/ic_subtitles"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/exo_playback_speed"
-            app:layout_constraintTop_toTopOf="parent" />
-
-        <ImageButton
-            android:id="@+id/exo_playback_speed"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_marginStart="8dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/exo_player_speed"
-            android:src="@drawable/ic_speed"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
+            app:layout_constraintTop_toBottomOf="@+id/exo_progress">
+            
+            <ImageButton
+                android:id="@+id/exo_fullscreen"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/exo_player_fullscreen"
+                android:src="@drawable/ic_fullscreen"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent" />
+    
+            <ImageButton
+                android:id="@+id/exo_subtitle"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="16dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/exo_player_subtitles"
+                android:src="@drawable/ic_subtitles"
+                android:visibility="gone"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintStart_toEndOf="@+id/exo_fullscreen"
+                app:layout_constraintTop_toTopOf="parent"
+                tools:visibility="visible" />
+    
+            <ImageButton
+                android:id="@+id/exo_audio_track"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="16dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/exo_player_audio_track"
+                android:src="@drawable/ic_audio_track"
+                android:visibility="gone"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintStart_toEndOf="@+id/exo_subtitle"
+                app:layout_constraintTop_toTopOf="parent"
+                tools:visibility="visible" />
+    
+            <ImageButton
+                android:id="@+id/exo_aspect_ratio"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="16dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/exo_player_aspect_ratio"
+                android:src="@drawable/ic_aspect_ratio"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintStart_toEndOf="@+id/exo_audio_track"
+                app:layout_constraintTop_toTopOf="parent" />
+        </androidx.constraintlayout.widget.ConstraintLayout>
     </androidx.constraintlayout.widget.ConstraintLayout>
 
     <!-- Loading indicator -->
