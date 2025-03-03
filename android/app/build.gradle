@@ -54,6 +54,30 @@ react {
     autolinkLibrariesWithApp()
 }
 
+// Add this task to create empty codegen directories for problematic libraries
+task createEmptyCodegenDirs {
+    doLast {
+        def codegenDirs = [
+            "../../node_modules/@d11/react-native-fast-image/android/build/generated/source/codegen/jni",
+            "../../node_modules/@react-native-async-storage/async-storage/android/build/generated/source/codegen/jni",
+            "../../node_modules/react-native-share/android/build/generated/source/codegen/jni",
+            "../../node_modules/react-native-vector-icons/android/build/generated/source/codegen/jni"
+        ]
+        
+        codegenDirs.each { dir ->
+            def dirFile = new File(projectDir, dir)
+            if (!dirFile.exists()) {
+                dirFile.mkdirs()
+                // Create a dummy CMakeLists.txt file
+                new File(dirFile, "CMakeLists.txt").text = "# Empty CMakeLists.txt\n"
+            }
+        }
+    }
+}
+
+// Make sure createEmptyCodegenDirs runs before the build tasks
+preBuild.dependsOn(createEmptyCodegenDirs)
+
 /**
  * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
  */
@@ -84,6 +108,9 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        
+        // Enable multidex
+        multiDexEnabled true
     }
     signingConfigs {
         debug {
@@ -105,6 +132,21 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
+    
+    // Configure only necessary ABIs to reduce build size
+    splits {
+        abi {
+            enable true
+            reset()
+            include "armeabi-v7a", "arm64-v8a"
+            universalApk false
+        }
+    }
+    
+    packagingOptions {
+        pickFirst '**/libc++_shared.so'
+        pickFirst '**/libfbjni.so'
+    }
 }
 
 dependencies {
@@ -116,6 +158,18 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+    
+    // ExoPlayer dependencies
+    implementation("androidx.media3:media3-exoplayer:1.5.1")
+    implementation("androidx.media3:media3-exoplayer-dash:1.5.1")
+    implementation("androidx.media3:media3-ui:1.5.1")
+    
+    // AppCompat dependency
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    
+    // Multidex support
+    implementation("androidx.multidex:multidex:2.0.1")
 }
 
 // Add this block for react-native-vector-icons

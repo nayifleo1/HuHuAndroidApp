@@ -24,5 +24,12 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
       </activity>
+      
+      <activity
+        android:name=".videoplayer.ExoPlayerActivity"
+        android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+        android:theme="@style/Theme.AppCompat.NoActionBar"
+        android:exported="false">
+      </activity>
     </application>
 </manifest>

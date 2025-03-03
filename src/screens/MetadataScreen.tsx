@@ -634,7 +634,9 @@ const MetadataScreen = () => {
   const handlePlayStream = async (stream: Stream) => {
     if (settings.useExternalPlayer) {
       try {
-        await VideoPlayerService.playVideo(stream.url);
+        await VideoPlayerService.playVideo(stream.url, {
+          useExternalPlayer: true
+        });
       } catch (error) {
         console.error('Failed to play in external player:', error);
         // Fallback to internal player
@@ -649,15 +651,29 @@ const MetadataScreen = () => {
         });
       }
     } else {
-      navigation.navigate('Player', {
-        id,
-        type,
-        title: metadata?.name,
-        poster: metadata?.poster,
-        stream: stream.url,
-        headers: stream.headers,
-        subtitles: stream.subtitles
-      });
+      try {
+        // Try to use native ExoPlayer
+        const subtitles = stream.subtitles && stream.subtitles.length > 0 ? stream.subtitles[0] : undefined;
+        await VideoPlayerService.playVideo(stream.url, {
+          useExternalPlayer: false,
+          title: metadata?.name,
+          poster: metadata?.poster,
+          subtitleUrl: subtitles?.url,
+          subtitleLanguage: subtitles?.lang
+        });
+      } catch (error) {
+        console.error('Failed to play with ExoPlayer:', error);
+        // Fallback to React Native Video player
+        navigation.navigate('Player', {
+          id,
+          type,
+          title: metadata?.name,
+          poster: metadata?.poster,
+          stream: stream.url,
+          headers: stream.headers,
+          subtitles: stream.subtitles
+        });
+      }
     }
   };
 
