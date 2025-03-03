@@ -171,7 +171,9 @@
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/exo_player_subtitles"
                 android:src="@drawable/ic_subtitles"
-                android:visibility="gone"
+                android:visibility="visible"
+                android:tint="@android:color/white"
+                android:alpha="1.0"
                 app:layout_constraintBottom_toBottomOf="parent"
                 app:layout_constraintStart_toEndOf="@+id/exo_fullscreen"
                 app:layout_constraintTop_toTopOf="parent"
@@ -185,11 +187,10 @@
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/exo_player_audio_track"
                 android:src="@drawable/ic_audio_track"
-                android:visibility="gone"
+                android:visibility="visible"
                 app:layout_constraintBottom_toBottomOf="parent"
                 app:layout_constraintStart_toEndOf="@+id/exo_subtitle"
-                app:layout_constraintTop_toTopOf="parent"
-                tools:visibility="visible" />
+                app:layout_constraintTop_toTopOf="parent" />
     
             <ImageButton
                 android:id="@+id/exo_aspect_ratio"

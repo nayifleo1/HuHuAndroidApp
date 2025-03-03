@@ -3,6 +3,8 @@ package com.stremiomobile.videoplayer
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.WindowInsets
@@ -49,6 +51,8 @@ class ExoPlayerActivity : AppCompatActivity() {
     // Reference to subtitle button to avoid repeated findViewById calls
     private var subtitleButton: ImageButton? = null
     private var audioButton: ImageButton? = null
+    // Flag to track if we've detected subtitles at any point
+    private var subtitlesEverDetected = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,8 +63,35 @@ class ExoPlayerActivity : AppCompatActivity() {
         
         // Setup fullscreen
         setupFullscreen()
+        hideSystemUi()
         
         playerView = findViewById(R.id.player_view)
+        
+        // Configure PlayerView to prevent auto-hiding of controls
+        playerView.controllerShowTimeoutMs = 0 // Prevent auto-hiding of controls
+        playerView.controllerHideOnTouch = false // Don't hide controls on touch
+        playerView.setShowNextButton(false)
+        playerView.setShowPreviousButton(false)
+        
+        // Override the controller visibility listener to prevent hiding
+        playerView.setControllerVisibilityListener(androidx.media3.ui.PlayerView.ControllerVisibilityListener { visibility ->
+            // If controller is trying to hide (visibility = GONE), force it to stay visible
+            if (visibility == View.GONE) {
+                // Schedule showing the controller again
+                Handler(Looper.getMainLooper()).post {
+                    playerView.showController()
+                    // Ensure our subtitle button stays visible and enabled
+                    subtitleButton?.apply {
+                        this.visibility = View.VISIBLE
+                        isEnabled = true
+                        alpha = 1.0f
+                        setColorFilter(android.graphics.Color.WHITE)
+                        invalidate()
+                    }
+                }
+                Log.d(TAG, "Controller tried to hide, forcing it to stay visible")
+            }
+        })
         
         // Get video URL and title from intent
         val videoUrl = intent.getStringExtra("VIDEO_URL") ?: ""
@@ -107,6 +138,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             visibility = View.VISIBLE
             isEnabled = true
             alpha = 1.0f
+            setColorFilter(android.graphics.Color.WHITE)
             setOnClickListener {
                 showSubtitleOptions()
             }
@@ -118,6 +150,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             visibility = View.VISIBLE
             isEnabled = true
             alpha = 1.0f
+            setColorFilter(android.graphics.Color.WHITE)
             setOnClickListener {
                 showAudioTrackOptions()
             }
@@ -128,6 +161,29 @@ class ExoPlayerActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.exo_aspect_ratio)?.setOnClickListener {
             toggleAspectRatio()
         }
+        
+        // Setup periodic check to ensure subtitle button remains enabled
+        val handler = Handler(Looper.getMainLooper())
+        val runnableCode = object : Runnable {
+            override fun run() {
+                // Check if we should keep the subtitle button enabled
+                subtitleButton?.apply {
+                    // Always keep the subtitle button visible and enabled
+                    if (!isEnabled || alpha < 1.0f || visibility != View.VISIBLE) {
+                        Log.d(TAG, "Periodic check: Re-enabling subtitle button")
+                        isEnabled = true
+                        visibility = View.VISIBLE
+                        alpha = 1.0f
+                        setColorFilter(android.graphics.Color.WHITE)
+                        invalidate() // Force redraw
+                    }
+                }
+                // Run more frequently to catch visibility changes (200ms instead of 1000ms)
+                handler.postDelayed(this, 200)
+            }
+        }
+        // Start the periodic check
+        handler.post(runnableCode)
         
         // Initialize player
         initializePlayer(videoUrl)
@@ -140,6 +196,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             setParameters(buildUponParameters()
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                 .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                .setPreferredTextLanguage(subtitleLanguage ?: "en")
                 .build())
         }
         
@@ -212,6 +269,12 @@ class ExoPlayerActivity : AppCompatActivity() {
                             val tracks = exoPlayer.currentTracks
                             logTrackInfo(tracks)
                             Log.d(TAG, "Playback STATE_READY, track info logged")
+                            
+                            // Update subtitle button immediately when playback is ready
+                            updateSubtitleButtonState(tracks)
+                            
+                            // Keep controls visible
+                            keepControlsVisible()
                         }
                     }
                     
@@ -219,10 +282,81 @@ class ExoPlayerActivity : AppCompatActivity() {
                         super.onTracksChanged(tracks)
                         // Log track information for debugging
                         logTrackInfo(tracks)
+                        
+                        // Update subtitle button visibility based on available subtitle tracks
+                        updateSubtitleButtonState(tracks)
+                        
+                        // Force redraw of the subtitle button to update its appearance
+                        subtitleButton?.invalidate()
+                    }
+                    
+                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                        super.onPlayerError(error)
+                        Log.e(TAG, "Player error: ${error.localizedMessage}")
+                        // Even on error, keep subtitle button enabled if we detected subtitles earlier
+                        if (subtitlesEverDetected || hasExternalSubtitles) {
+                            subtitleButton?.apply {
+                                isEnabled = true
+                                visibility = View.VISIBLE
+                                alpha = 1.0f
+                                setColorFilter(android.graphics.Color.WHITE)
+                            }
+                            Log.d(TAG, "Keeping subtitle button enabled despite player error")
+                        }
                     }
                 })
                 exoPlayer.prepare()
             }
+    }
+    
+    private fun updateSubtitleButtonState(tracks: Tracks) {
+        // Count all text tracks for subtitles
+        var hasTextTracks = false
+        
+        for (group in tracks.groups) {
+            if (group.type == C.TRACK_TYPE_TEXT) {
+                if (group.length > 0) {
+                    hasTextTracks = true
+                    subtitlesEverDetected = true  // Remember we've seen subtitles at least once
+                    break
+                }
+            }
+        }
+        
+        // Use previously detected subtitles flag to prevent disabling after detection
+        val hasSubtitles = hasTextTracks || hasExternalSubtitles || subtitlesEverDetected
+        
+        // Update subtitle button appearance
+        subtitleButton?.apply {
+            // Always enable the subtitle button if there are text tracks or we've ever detected them
+            isEnabled = hasSubtitles
+            
+            // Always keep the button visible
+            visibility = View.VISIBLE
+            
+            // Update the button's appearance based on availability
+            if (hasSubtitles) {
+                // Make it fully opaque and white when subtitles are available
+                alpha = 1.0f
+                // Set the tint to white to make it clearly visible
+                setColorFilter(android.graphics.Color.WHITE)
+            } else {
+                // Make it semi-transparent and grey when no subtitles are available
+                alpha = 0.5f
+                // Set the tint to grey for disabled state
+                setColorFilter(android.graphics.Color.GRAY)
+            }
+            
+            Log.d(TAG, "Subtitle button updated: hasTextTracks=$hasTextTracks, hasExternalSubtitles=$hasExternalSubtitles, subtitlesEverDetected=$subtitlesEverDetected, isEnabled=$isEnabled, alpha=$alpha")
+        }
+        
+        // Also update the audio track button visibility since we have audio tracks
+        audioButton?.apply {
+            visibility = View.VISIBLE
+            isEnabled = true
+            alpha = 1.0f
+            setColorFilter(android.graphics.Color.WHITE)
+        }
     }
     
     private fun getLanguageDisplayName(languageCode: String): String {
@@ -302,72 +436,46 @@ class ExoPlayerActivity : AppCompatActivity() {
                 if (group.type == C.TRACK_TYPE_TEXT) {
                     for (trackIndex in 0 until group.length) {
                         subtitleTracks.add(Pair(groupIndex, trackIndex))
+                        // Remember we found subtitles
+                        subtitlesEverDetected = true
                     }
                 }
             }
             
-            // Log subtitle tracks for debugging
-            Log.d(TAG, "Found ${subtitleTracks.size} subtitle tracks for dialog")
-            
-            // If no subtitle tracks and no external subtitles, show message but don't return
-            if (subtitleTracks.isEmpty() && !hasExternalSubtitles) {
-                // Create and show a simple dialog with a message
-                AlertDialog.Builder(this)
-                    .setTitle("Subtitles")
-                    .setMessage("No subtitle tracks available for this video")
-                    .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
-                    .show()
-                return
+            // If we ever detected subtitles but they're not present now, force the memory flag
+            if (subtitlesEverDetected && subtitleTracks.isEmpty()) {
+                Log.d(TAG, "No subtitle tracks currently present, but we've detected them before")
             }
             
-            // Create list of subtitle options
-            val subtitleOptions = mutableListOf<String>()
+            // Log subtitle track count for debugging
+            Log.d(TAG, "Subtitle tracks found: ${subtitleTracks.size}, Has external: $hasExternalSubtitles, Ever detected: $subtitlesEverDetected")
             
-            // Add "Off" option
-            subtitleOptions.add("Off")
+            // Create subtitle options - first option is always "Off"
+            val subtitleOptions = mutableListOf("Off")
             
-            // Add all available subtitle tracks
-            tracks.groups.forEachIndexed { groupIndex, group ->
-                if (group.type == C.TRACK_TYPE_TEXT) {
-                    for (trackIndex in 0 until group.length) {
-                        val format = group.getTrackFormat(trackIndex)
-                        
-                        // Get subtitle name - use label if available, otherwise try language
-                        val trackName = when {
-                            !format.label.isNullOrEmpty() -> format.label.toString()
-                            !format.language.isNullOrEmpty() -> getLanguageDisplayName(format.language!!)
-                            else -> "Track ${subtitleOptions.size}"
-                        }
-                        
-                        // Check if it has characteristics like "SDH" or "CC"
-                        val accessibilityChannel = format.accessibilityChannel
-                        val isSDH = format.roleFlags and C.ROLE_FLAG_DESCRIBES_MUSIC_AND_SOUND != 0
-                        val isCC = format.roleFlags and C.ROLE_FLAG_CAPTION != 0
-                        
-                        val suffix = when {
-                            isSDH -> "SDH"
-                            isCC -> "CC"
-                            accessibilityChannel == 1 -> "CC"
-                            accessibilityChannel == 2 -> "SDH"
-                            format.id?.contains("sdh", ignoreCase = true) == true -> "SDH"
-                            format.id?.contains("cc", ignoreCase = true) == true -> "CC"
-                            else -> ""
-                        }
-                        
-                        val displayName = if (suffix.isNotEmpty()) "$trackName ($suffix)" else trackName
-                        subtitleOptions.add(displayName)
-                    }
+            // Add all found subtitle tracks
+            subtitleTracks.forEachIndexed { index, pair ->
+                val group = tracks.groups[pair.first]
+                val format = group.getTrackFormat(pair.second)
+                val trackName = when {
+                    !format.label.isNullOrEmpty() -> format.label.toString()
+                    !format.language.isNullOrEmpty() -> getLanguageDisplayName(format.language!!)
+                    else -> "Track ${index + 1}"
                 }
+                subtitleOptions.add(trackName)
+                
+                Log.d(TAG, "Found subtitle track: $trackName")
             }
             
             // If we have an external subtitle but no in-stream subtitles, add it as an option
-            if (subtitleTracks.isEmpty() && hasExternalSubtitles) {
+            if (hasExternalSubtitles) {
                 val displayName = if (subtitleLanguage != null) {
                     getLanguageDisplayName(subtitleLanguage!!)
                 } else {
                     "External"
                 }
                 subtitleOptions.add(displayName)
+                Log.d(TAG, "Added external subtitle option: $displayName")
             }
             
             // Determine current selection
@@ -380,10 +488,22 @@ class ExoPlayerActivity : AppCompatActivity() {
                 selectedIndex = 1
             }
             
-            // Show dialog
-            AlertDialog.Builder(this)
+            // Prepare dialog message
+            val dialogMessage = if (subtitleOptions.size <= 1) {
+                "No subtitle tracks available for this video"
+            } else {
+                "Select subtitle track:"
+            }
+            
+            Log.d(TAG, "Creating subtitle dialog with ${subtitleOptions.size} options, selected: $selectedIndex")
+            
+            // Show dialog - always show a dialog, even if no subtitles are available
+            val builder = AlertDialog.Builder(this)
                 .setTitle("Subtitles")
-                .setSingleChoiceItems(
+            
+            // If we have options other than just "Off", show a choice dialog
+            if (subtitleOptions.size > 1) {
+                builder.setSingleChoiceItems(
                     subtitleOptions.toTypedArray(),
                     selectedIndex
                 ) { dialog, which ->
@@ -393,6 +513,7 @@ class ExoPlayerActivity : AppCompatActivity() {
                             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                             .build()
                         trackSelector.parameters = newParameters
+                        Log.d(TAG, "Subtitles disabled by user")
                         Toast.makeText(this, "Subtitles disabled", Toast.LENGTH_SHORT).show()
                     } else {
                         // Enable subtitles
@@ -400,12 +521,18 @@ class ExoPlayerActivity : AppCompatActivity() {
                             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                             .build()
                         trackSelector.parameters = newParameters
+                        Log.d(TAG, "Subtitles enabled: ${subtitleOptions[which]}")
                         Toast.makeText(this, "Subtitles enabled: ${subtitleOptions[which]}", Toast.LENGTH_SHORT).show()
                     }
                     dialog.dismiss()
                 }
-                .create()
-                .show()
+            } else {
+                // Just show a message if no subtitle options
+                builder.setMessage(dialogMessage)
+                    .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
+            }
+            
+            builder.create().show()
         }
     }
     
@@ -551,6 +678,7 @@ class ExoPlayerActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         hideSystemUi()
+        keepControlsVisible()
     }
 
     override fun onPause() {
@@ -571,5 +699,13 @@ class ExoPlayerActivity : AppCompatActivity() {
             exoPlayer.release()
         }
         player = null
+    }
+
+    // Add this method to ensure controls always stay visible
+    private fun keepControlsVisible() {
+        // Force controller to be visible
+        playerView.showController()
+        playerView.controllerHideOnTouch = false
+        playerView.controllerShowTimeoutMs = 0
     }
 } 
