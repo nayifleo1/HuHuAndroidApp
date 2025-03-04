@@ -1,4 +1,4 @@
-package com.stremiomobile.videoplayer
+package com.huhu.app.videoplayer
 
 import android.content.pm.ActivityInfo
 import android.net.Uri
@@ -28,7 +28,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
-import com.stremiomobile.R
+import com.huhu.app.R
 import java.util.HashMap
 import java.util.Locale
 

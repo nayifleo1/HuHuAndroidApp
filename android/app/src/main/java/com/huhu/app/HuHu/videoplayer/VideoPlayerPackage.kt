@@ -1,4 +1,4 @@
-package com.stremiomobile.videoplayer
+package com.huhu.app.videoplayer
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule

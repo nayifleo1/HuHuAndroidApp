@@ -101,9 +101,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.stremiomobile"
+    namespace "com.huhu.app"
     defaultConfig {
-        applicationId "com.stremiomobile"
+        applicationId "com.huhu.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
