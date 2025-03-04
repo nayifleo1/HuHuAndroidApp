@@ -7,6 +7,7 @@ import { PaperProvider, MD3DarkTheme, MD3LightTheme, adaptNavigationTheme } from
 import type { MD3Theme } from 'react-native-paper';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { colors } from '../styles/colors';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 // Screens
 import {
@@ -279,6 +280,8 @@ const MainTabs = () => {
           marginLeft: Platform.OS === 'ios' ? 8 : 0,
         },
         headerShadowVisible: false,
+        animation: 'fade',
+        presentation: 'card'
       })}
     >
       <Tab.Screen 

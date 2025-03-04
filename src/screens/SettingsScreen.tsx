@@ -15,6 +15,7 @@ import { useNavigation } from '@react-navigation/native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { colors } from '../styles/colors';
 import { useSettings, DEFAULT_SETTINGS, AppSettings } from '../hooks/useSettings';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 const SettingsScreen: React.FC = () => {
   const { settings, updateSetting } = useSettings();
@@ -100,7 +101,11 @@ const SettingsScreen: React.FC = () => {
       { backgroundColor: isDarkMode ? colors.darkBackground : colors.lightBackground }
     ]}>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <ScrollView style={styles.scrollView}>
+      <Animated.ScrollView 
+        entering={FadeIn.duration(300)}
+        exiting={FadeOut.duration(300)}
+        style={styles.scrollView}
+      >
         {renderSectionHeader('Appearance')}
         {renderSettingItem(
           'Dark Mode',
@@ -285,7 +290,7 @@ const SettingsScreen: React.FC = () => {
           'info',
           () => null
         )}
-      </ScrollView>
+      </Animated.ScrollView>
     </SafeAreaView>
   );
 };

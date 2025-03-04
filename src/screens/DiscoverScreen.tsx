@@ -16,6 +16,7 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { colors } from '../styles';
 import { catalogService, StreamingContent } from '../services/catalogService';
 import FastImage from '@d11/react-native-fast-image';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 interface Category {
   id: string;
@@ -125,6 +126,27 @@ const DiscoverScreen = () => {
     );
   };
 
+  if (loading) {
+    return (
+      <SafeAreaView style={[
+        styles.container,
+        { backgroundColor: isDarkMode ? colors.darkBackground : colors.lightBackground }
+      ]}>
+        <StatusBar
+          barStyle={isDarkMode ? 'light-content' : 'dark-content'}
+          backgroundColor={isDarkMode ? colors.darkBackground : colors.lightBackground}
+        />
+        <Animated.View 
+          entering={FadeIn.duration(300)}
+          exiting={FadeOut.duration(300)}
+          style={styles.loadingContainer}
+        >
+          <ActivityIndicator size="large" color={colors.primary} />
+        </Animated.View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={[
       styles.container,
@@ -135,36 +157,36 @@ const DiscoverScreen = () => {
         backgroundColor={isDarkMode ? colors.darkBackground : colors.lightBackground}
       />
       
-      <View style={styles.header}>
-        <View style={styles.headerContent}>
-          <Text style={[styles.headerTitle, { color: isDarkMode ? colors.white : colors.black }]}>
-            Discover
-          </Text>
-          <TouchableOpacity onPress={handleSearchPress} style={styles.searchButton}>
-            <View style={styles.searchIconContainer}>
-              <MaterialIcons name="search" size={24} color={isDarkMode ? colors.white : colors.black} />
-            </View>
-          </TouchableOpacity>
+      <Animated.View 
+        entering={FadeIn.duration(300)}
+        exiting={FadeOut.duration(300)}
+        style={{ flex: 1 }}
+      >
+        <View style={styles.header}>
+          <View style={styles.headerContent}>
+            <Text style={[styles.headerTitle, { color: isDarkMode ? colors.white : colors.black }]}>
+              Discover
+            </Text>
+            <TouchableOpacity onPress={handleSearchPress} style={styles.searchButton}>
+              <View style={styles.searchIconContainer}>
+                <MaterialIcons name="search" size={24} color={isDarkMode ? colors.white : colors.black} />
+              </View>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
-      
-      <View style={styles.categoryContainer}>
-        <FlatList
-          horizontal
-          data={CATEGORIES}
-          renderItem={renderCategory}
-          keyExtractor={item => item.id}
-          style={styles.categoriesList}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoriesContent}
-        />
-      </View>
-      
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
+        
+        <View style={styles.categoryContainer}>
+          <FlatList
+            horizontal
+            data={CATEGORIES}
+            renderItem={renderCategory}
+            keyExtractor={item => item.id}
+            style={styles.categoriesList}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.categoriesContent}
+          />
         </View>
-      ) : (
+        
         <FlatList
           data={content}
           renderItem={renderContentItem}
@@ -173,7 +195,7 @@ const DiscoverScreen = () => {
           contentContainerStyle={styles.contentList}
           showsVerticalScrollIndicator={false}
         />
-      )}
+      </Animated.View>
     </SafeAreaView>
   );
 };

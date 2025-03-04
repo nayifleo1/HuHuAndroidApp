@@ -118,7 +118,7 @@ class StremioService {
   private readonly STORAGE_KEY = 'stremio-addons';
   private readonly DEFAULT_ADDONS = [
     'https://v3-cinemeta.strem.io/manifest.json',
-    'https://v3-community-content.strem.io/manifest.json',
+    
   ];
   private readonly MAX_CONCURRENT_REQUESTS = 3;
   private readonly DEFAULT_PAGE_SIZE = 50;
@@ -348,7 +348,6 @@ class StremioService {
       // Try Cinemeta with different base URLs
       const cinemetaUrls = [
         'https://v3-cinemeta.strem.io',
-        'https://v2-cinemeta.strem.io',
         'http://v3-cinemeta.strem.io'
       ];
 

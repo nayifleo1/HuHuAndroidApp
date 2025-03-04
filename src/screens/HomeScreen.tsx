@@ -22,6 +22,7 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import FastImage from '@d11/react-native-fast-image';
 import { colors } from '../styles/colors';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 // Define interfaces for our data
 interface Category {
@@ -36,6 +37,45 @@ const SAMPLE_CATEGORIES: Category[] = [
   { id: 'channel', name: 'Channels' },
 ];
 
+const SkeletonCatalog = () => (
+  <View style={styles.catalogContainer}>
+    <View style={styles.catalogHeader}>
+      <View style={[styles.skeletonBox, { width: 150, height: 24 }]} />
+      <View style={[styles.skeletonBox, { width: 80, height: 20 }]} />
+    </View>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.catalogList}>
+      {[1, 2, 3, 4].map((_, index) => (
+        <View key={index} style={[styles.contentItem, styles.skeletonPoster]} />
+      ))}
+    </ScrollView>
+  </View>
+);
+
+const SkeletonFeatured = () => (
+  <View style={styles.featuredContainer}>
+    <View style={[styles.skeletonBox, styles.skeletonFeatured]}>
+      <LinearGradient
+        colors={['rgba(0,0,0,0.1)', 'rgba(0,0,0,0.7)', 'rgba(0,0,0,0.95)']}
+        style={styles.featuredGradient}
+      >
+        <View style={styles.featuredContent}>
+          <View style={[styles.skeletonBox, { width: width * 0.6, height: 60, marginBottom: 16 }]} />
+          <View style={styles.genreContainer}>
+            {[1, 2, 3].map((_, index) => (
+              <View key={index} style={[styles.skeletonBox, { width: 80, height: 24, marginRight: 8 }]} />
+            ))}
+          </View>
+          <View style={[styles.skeletonBox, { width: width * 0.8, height: 60, marginTop: 16 }]} />
+          <View style={styles.featuredButtons}>
+            <View style={[styles.skeletonBox, { flex: 1, height: 50, marginRight: 12, borderRadius: 25 }]} />
+            <View style={[styles.skeletonBox, { flex: 1, height: 50, borderRadius: 25 }]} />
+          </View>
+        </View>
+      </LinearGradient>
+    </View>
+  </View>
+);
+
 const HomeScreen = () => {
   const navigation = useNavigation();
   const isDarkMode = useColorScheme() === 'dark';
@@ -45,6 +85,7 @@ const HomeScreen = () => {
   const [featuredContent, setFeaturedContent] = useState<StreamingContent | null>(null);
   const [allFeaturedContent, setAllFeaturedContent] = useState<StreamingContent[]>([]);
   const [catalogs, setCatalogs] = useState<CatalogContent[]>([]);
+  const maxRetries = 3;
 
   // Function to rotate featured content
   const rotateFeaturedContent = useCallback(() => {
@@ -65,66 +106,99 @@ const HomeScreen = () => {
     try {
       setLoading(true);
       
-      // Load catalogs from service
-      const homeCatalogs = await catalogService.getHomeCatalogs();
+      // Helper function to delay execution
+      const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
       
-      // Filter for Cinemeta catalogs only
-      const allCinemetaCatalogs = homeCatalogs.filter(catalog => 
-        catalog.addon === 'com.linvo.cinemeta'
-      );
+      // Try loading content with retries
+      let attempt = 0;
+      while (attempt < maxRetries) {
+        try {
+          // Load catalogs from service
+          const homeCatalogs = await catalogService.getHomeCatalogs();
+          
+          // Filter for Cinemeta catalogs only
+          const allCinemetaCatalogs = homeCatalogs.filter(catalog => 
+            catalog.addon === 'com.linvo.cinemeta'
+          );
 
-      // Create a map to store unique catalogs by their content
-      const uniqueCatalogsMap = new Map();
-      
-      allCinemetaCatalogs.forEach(catalog => {
-        // Create a key based on the items' IDs to detect duplicate content
-        const contentKey = catalog.items.map(item => item.id).sort().join(',');
-        
-        // Only keep the first occurrence of each unique content collection
-        if (!uniqueCatalogsMap.has(contentKey)) {
-          uniqueCatalogsMap.set(contentKey, catalog);
+          // If no catalogs found, wait and retry
+          if (allCinemetaCatalogs.length === 0) {
+            attempt++;
+            console.log(`No catalogs found, retrying... (attempt ${attempt})`);
+            await delay(2000); // Wait 2 seconds before next attempt
+            continue;
+          }
+
+          // Create a map to store unique catalogs by their content
+          const uniqueCatalogsMap = new Map();
+          
+          allCinemetaCatalogs.forEach(catalog => {
+            // Create a key based on the items' IDs to detect duplicate content
+            const contentKey = catalog.items.map(item => item.id).sort().join(',');
+            
+            // Only keep the first occurrence of each unique content collection
+            if (!uniqueCatalogsMap.has(contentKey)) {
+              uniqueCatalogsMap.set(contentKey, catalog);
+            }
+          });
+
+          // Convert map back to array
+          const cinemetaCatalogs = Array.from(uniqueCatalogsMap.values());
+
+          // Find popular content from Cinemeta
+          const popularCatalog = cinemetaCatalogs.find(catalog => 
+            catalog.name.toLowerCase().includes('popular') || 
+            catalog.name.toLowerCase().includes('top') ||
+            catalog.id.toLowerCase().includes('top')
+          );
+
+          // Set catalogs showing only unique Cinemeta content
+          setCatalogs(cinemetaCatalogs);
+          
+          // Set featured content from popular Cinemeta content
+          if (popularCatalog && popularCatalog.items.length > 0) {
+            setAllFeaturedContent(popularCatalog.items);
+            const randomIndex = Math.floor(Math.random() * popularCatalog.items.length);
+            setFeaturedContent(popularCatalog.items[randomIndex]);
+          } else if (cinemetaCatalogs.length > 0 && cinemetaCatalogs[0].items.length > 0) {
+            // Fall back to first Cinemeta catalog
+            setAllFeaturedContent(cinemetaCatalogs[0].items);
+            setFeaturedContent(cinemetaCatalogs[0].items[0]);
+          }
+
+          // If we get here, we've successfully loaded content
+          return;
+
+        } catch (error) {
+          attempt++;
+          console.error(`Failed to load content (attempt ${attempt}):`, error);
+          if (attempt < maxRetries) {
+            await delay(2000); // Wait 2 seconds before next attempt
+          }
         }
-      });
-
-      // Convert map back to array
-      const cinemetaCatalogs = Array.from(uniqueCatalogsMap.values());
-
-      // Find popular content from Cinemeta
-      const popularCatalog = cinemetaCatalogs.find(catalog => 
-        catalog.name.toLowerCase().includes('popular') || 
-        catalog.name.toLowerCase().includes('top') ||
-        catalog.id.toLowerCase().includes('top')
-      );
-
-      // Set catalogs showing only unique Cinemeta content
-      setCatalogs(cinemetaCatalogs);
-      
-      // Set featured content from popular Cinemeta content
-      if (popularCatalog && popularCatalog.items.length > 0) {
-        setAllFeaturedContent(popularCatalog.items);
-        const randomIndex = Math.floor(Math.random() * popularCatalog.items.length);
-        setFeaturedContent(popularCatalog.items[randomIndex]);
-      } else if (cinemetaCatalogs.length > 0 && cinemetaCatalogs[0].items.length > 0) {
-        // Fall back to first Cinemeta catalog
-        setAllFeaturedContent(cinemetaCatalogs[0].items);
-        setFeaturedContent(cinemetaCatalogs[0].items[0]);
       }
-    } catch (error) {
-      console.error('Failed to load content:', error);
+
+      // If we get here, all retries failed
+      console.error('All attempts to load content failed');
+      setCatalogs([]);
+      setAllFeaturedContent([]);
+      setFeaturedContent(null);
+
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [selectedCategory]);
+  }, [maxRetries]);
+
+  // Reset retry count when refreshing manually
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true);
+    loadContent();
+  }, [loadContent]);
 
   useEffect(() => {
     loadContent();
   }, [loadContent]);
-
-  const handleRefresh = () => {
-    setRefreshing(true);
-    loadContent();
-  };
 
   const handleCategoryChange = (categoryId: string) => {
     setSelectedCategory(categoryId);
@@ -286,9 +360,24 @@ const HomeScreen = () => {
 
   if (loading && !refreshing) {
     return (
-      <View style={[styles.loadingContainer, { backgroundColor: isDarkMode ? '#000000' : '#FFFFFF' }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
+      <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#000000' : '#FFFFFF' }]}>
+        <StatusBar
+          barStyle="light-content"
+          backgroundColor="transparent"
+          translucent
+        />
+        <Animated.ScrollView 
+          entering={FadeIn.duration(300)}
+          exiting={FadeOut.duration(300)}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <SkeletonFeatured />
+          {[1, 2, 3].map((_, index) => (
+            <SkeletonCatalog key={index} />
+          ))}
+        </Animated.ScrollView>
+      </SafeAreaView>
     );
   }
 
@@ -300,7 +389,9 @@ const HomeScreen = () => {
         translucent
       />
 
-      <ScrollView
+      <Animated.ScrollView
+        entering={FadeIn.duration(300)}
+        exiting={FadeOut.duration(300)}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={isDarkMode ? '#FFFFFF' : '#121212'} />
         }
@@ -325,7 +416,7 @@ const HomeScreen = () => {
             </Text>
           </View>
         )}
-      </ScrollView>
+      </Animated.ScrollView>
     </SafeAreaView>
   );
 };
@@ -566,6 +657,20 @@ const styles = StyleSheet.create({
   emptyCatalog: {
     padding: 24,
     alignItems: 'center',
+  },
+  skeletonBox: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  skeletonFeatured: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  skeletonPoster: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    marginHorizontal: 4,
   },
 });
 

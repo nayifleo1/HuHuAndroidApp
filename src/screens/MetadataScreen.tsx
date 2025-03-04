@@ -40,6 +40,7 @@ import {
   GestureDetector,
   GestureHandlerRootView
 } from 'react-native-gesture-handler';
+import { cacheService } from '../services/cacheService';
 
 interface RouteParams {
   id: string;
@@ -172,6 +173,10 @@ const MetadataScreen = () => {
   const [loadingCastDetails, setLoadingCastDetails] = useState(false);
   const [modalOffset, setModalOffset] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Cast modal animation values
+  const castModalVisible = useSharedValue(0);
+  const castModalTranslateY = useSharedValue(0);
 
   const [selectedProvider, setSelectedProvider] = useState<string>('all');
   const [availableProviders, setAvailableProviders] = useState<Set<string>>(new Set());
@@ -316,103 +321,20 @@ const MetadataScreen = () => {
     try {
       setLoading(true);
       setError(null);
+
+      // Check cache first
+      const cachedMetadata = cacheService.getMetadata(id, type);
+      if (cachedMetadata) {
+        setMetadata(cachedMetadata);
+        setLoading(false);
+        return;
+      }
+
       const content = await catalogService.getContentDetails(type, id);
       if (content) {
         setMetadata(content);
-        setInLibrary(content.inLibrary || false);
-        
-        // Load episodes if this is a series
-        if (type === 'series') {
-          // First get Stremio metadata
-          const metaDetails = await stremioService.getMetaDetails(type, id);
-          
-          // Try to find TMDB ID from IMDB ID
-          const tmdbId = await tmdbService.findTMDBIdByIMDB(id);
-          setTmdbId(tmdbId);
-          
-          if (tmdbId) {
-            // Get show details first to get all seasons
-            const showDetails = await tmdbService.getTVShowDetails(tmdbId);
-            if (showDetails) {
-              // Create a map of season numbers to their poster paths
-              const seasonPosters = showDetails.seasons
-                .filter(season => season.season_number > 0)
-                .reduce<{ [key: number]: string | null }>((acc, season) => {
-                  acc[season.season_number] = season.poster_path;
-                  return acc;
-                }, {});
-
-              // Load all seasons in parallel
-              const seasonPromises = showDetails.seasons
-                .filter(season => season.season_number > 0)
-                .map(async (season) => {
-                  const seasonDetails = await tmdbService.getSeasonDetails(tmdbId, season.season_number);
-                  if (seasonDetails && seasonDetails.episodes) {
-                    return {
-                      seasonNumber: season.season_number,
-                      episodes: seasonDetails.episodes.map(episode => ({
-                        ...episode,
-                        season_poster_path: seasonPosters[season.season_number],
-                        episodeString: `S${episode.season_number.toString().padStart(2, '0')}E${episode.episode_number.toString().padStart(2, '0')}`,
-                        stremioId: `${id}:${episode.season_number}:${episode.episode_number}`
-                      }))
-                    };
-                  }
-                  return null;
-                });
-
-              const seasonResults = await Promise.all(seasonPromises);
-              
-              // Group all episodes by season
-              const allSeasons = seasonResults.reduce<GroupedEpisodes>((acc, result) => {
-                if (result) {
-                  acc[result.seasonNumber] = result.episodes;
-                }
-                return acc;
-              }, {});
-
-              setGroupedEpisodes(allSeasons);
-              
-              // Set initial season episodes
-              const firstSeason = Math.min(...Object.keys(allSeasons).map(Number));
-              setSelectedSeason(firstSeason);
-              setEpisodes(allSeasons[firstSeason] || []);
-            }
-          } else if (metaDetails && metaDetails.videos) {
-            // Fallback to Stremio data if TMDB lookup fails
-            const episodeData = metaDetails.videos.map(video => ({
-              id: parseInt(video.id.split(':').pop() || '0'),
-              name: video.title,
-              overview: '',
-              episode_number: video.episode || 0,
-              season_number: video.season || 0,
-              still_path: null,
-              air_date: video.released || '',
-              vote_average: 0,
-              stremioId: video.id,
-              episodeString: video.season && video.episode 
-                ? `S${video.season.toString().padStart(2, '0')}E${video.episode.toString().padStart(2, '0')}`
-                : ''
-            }));
-            
-            // Group episodes by season
-            const grouped = episodeData.reduce<GroupedEpisodes>((acc, episode) => {
-              const season = episode.season_number;
-              if (!acc[season]) {
-                acc[season] = [];
-              }
-              acc[season].push(episode);
-              return acc;
-            }, {});
-            
-            setEpisodes(episodeData);
-            setGroupedEpisodes(grouped);
-            setSelectedSeason(Object.keys(grouped).length > 0 ? parseInt(Object.keys(grouped)[0]) : 1);
-          }
-        }
-        
-        // Load streams automatically
-        loadStreams();
+        // Cache the metadata
+        cacheService.setMetadata(id, type, content);
       } else {
         setError('Content not found');
       }
@@ -424,20 +346,19 @@ const MetadataScreen = () => {
     }
   };
 
-  // Modify handleSeasonChange to use preloaded data
-  const handleSeasonChange = (seasonNumber: number) => {
-    if (selectedSeason === seasonNumber) return;
-    
-    setSelectedSeason(seasonNumber);
-    setEpisodes(groupedEpisodes[seasonNumber] || []);
-  };
-
   const loadStreams = async () => {
-    if (loadingStreams) return;
-    
     try {
       setLoadingStreams(true);
-      
+      setError(null);
+
+      // Check cache first
+      const cachedStreams = cacheService.getStreams(id, type);
+      if (cachedStreams) {
+        setGroupedStreams(cachedStreams);
+        setLoadingStreams(false);
+        return;
+      }
+
       // Initialize empty grouped streams
       setGroupedStreams({});
       const providers = new Set<string>();
@@ -526,19 +447,37 @@ const MetadataScreen = () => {
           }
         });
 
+      // Cache the streams
+      cacheService.setStreams(id, type, groupedStreams);
     } catch (error) {
       console.error('Failed to load streams:', error);
+      setError('Failed to load streams');
     } finally {
       setLoadingStreams(false);
     }
   };
 
-  const loadEpisodeStreams = async (episodeId: string) => {
-    if (loadingEpisodeStreams) return;
+  // Add back handleSeasonChange
+  const handleSeasonChange = (seasonNumber: number) => {
+    if (selectedSeason === seasonNumber) return;
     
+    setSelectedSeason(seasonNumber);
+    setEpisodes(groupedEpisodes[seasonNumber] || []);
+  };
+
+  const loadEpisodeStreams = async (episodeId: string) => {
     try {
       setLoadingEpisodeStreams(true);
-      
+      setError(null);
+
+      // Check cache first
+      const cachedStreams = cacheService.getEpisodeStreams(id, type, episodeId);
+      if (cachedStreams) {
+        setEpisodeStreams(cachedStreams);
+        setLoadingEpisodeStreams(false);
+        return;
+      }
+
       // Initialize empty episode streams
       setEpisodeStreams({});
       const providers = new Set<string>();
@@ -635,8 +574,11 @@ const MetadataScreen = () => {
         }
       });
 
+      // Cache the episode streams
+      cacheService.setEpisodeStreams(id, type, episodeId, episodeStreams);
     } catch (error) {
       console.error('Failed to load episode streams:', error);
+      setError('Failed to load episode streams');
     } finally {
       setLoadingEpisodeStreams(false);
     }
@@ -1058,11 +1000,24 @@ const MetadataScreen = () => {
   const loadCast = async () => {
     try {
       setLoadingCast(true);
+
+      // Check cache first
+      const cachedCast = cacheService.getCast(id, type);
+      if (cachedCast) {
+        setCast(cachedCast);
+        setLoadingCast(false);
+        return;
+      }
+
       let tmdbId = await tmdbService.findTMDBIdByIMDB(id);
       
       if (tmdbId) {
         const castData = await tmdbService.getCredits(tmdbId, type);
-        setCast(castData || []);
+        if (castData) {
+          setCast(castData);
+          // Cache the cast data
+          cacheService.setCast(id, type, castData);
+        }
       }
     } catch (error) {
       console.error('Failed to load cast:', error);
@@ -1130,7 +1085,11 @@ const MetadataScreen = () => {
               <View style={styles.castImageContainer}>
                 {member.profile_path && tmdbService.getImageUrl(member.profile_path, 'w185') ? (
                   <FastImage
-                    source={{ uri: tmdbService.getImageUrl(member.profile_path, 'w185')! }}
+                    source={{ 
+                      uri: tmdbService.getImageUrl(member.profile_path, 'w185')!,
+                      priority: FastImage.priority.normal,
+                      cache: FastImage.cacheControl.immutable
+                    }}
                     style={styles.castImage}
                     resizeMode={FastImage.resizeMode.cover}
                   />
@@ -1147,51 +1106,109 @@ const MetadataScreen = () => {
     );
   }, [loadingCast, cast, setSelectedCastMember, loadCastMemberDetails]);
 
-  const renderCastModal = () => {
+  // Background opacity style
+  const backgroundAnimatedStyle = useAnimatedStyle(() => {
+    return {
+      opacity: castModalVisible.value,
+    };
+  }, []);
+
+  // Modal content style
+  const modalAnimatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [
+        { translateY: castModalTranslateY.value }
+      ],
+    };
+  }, []);
+
+  // Cast modal pan gesture
+  const castPanGesture = useMemo(() => 
+    Gesture.Pan()
+      .onBegin(() => {
+        'worklet';
+        cancelAnimation(castModalTranslateY);
+      })
+      .onUpdate((event) => {
+        'worklet';
+        // Only allow downward dragging
+        if (event.translationY > 0) {
+          castModalTranslateY.value = event.translationY;
+        }
+      })
+      .onEnd((event) => {
+        'worklet';
+        // Determine if we should dismiss based on velocity or distance
+        const shouldDismiss = event.translationY > 150 || 
+                            (event.translationY > 0 && event.velocityY > 500);
+        
+        if (shouldDismiss) {
+          // Animate out and close modal
+          castModalTranslateY.value = withTiming(500, timingConfig, () => {
+            'worklet';
+            castModalVisible.value = withTiming(0, {
+              duration: 150,
+              easing: Easing.out(Easing.ease)
+            }, () => {
+              runOnJS(setSelectedCastMember)(null);
+              castModalTranslateY.value = 0;
+            });
+          });
+        } else {
+          // Return to original position
+          castModalTranslateY.value = withTiming(0, timingConfig);
+        }
+      }),
+    [timingConfig]
+  );
+
+  // Handle cast modal visibility
+  useEffect(() => {
+    if (selectedCastMember) {
+      castModalVisible.value = withTiming(1, {
+        duration: 200,
+        easing: Easing.out(Easing.ease)
+      });
+      castModalTranslateY.value = withTiming(0, {
+        duration: 300,
+        easing: Easing.out(Easing.back(1.5))
+      });
+    }
+  }, [selectedCastMember]);
+
+  const handleCloseCastModal = useCallback(() => {
+    castModalVisible.value = withTiming(0, {
+      duration: 200,
+      easing: Easing.in(Easing.ease)
+    }, () => {
+      runOnJS(setSelectedCastMember)(null);
+    });
+  }, []);
+
+  const renderCastModal = useCallback(() => {
     if (!selectedCastMember) return null;
 
     return (
-      <Modal
-        visible={!!selectedCastMember}
-        transparent
-        animationType="none"
-        onRequestClose={() => setSelectedCastMember(null)}
-      >
-        <View style={styles.modalContainer}>
+      <View style={styles.modalContainer}>
+        <Animated.View 
+          style={[styles.modalOverlay, backgroundAnimatedStyle]}
+        >
           <TouchableOpacity 
-            style={styles.modalOverlay}
+            style={styles.modalOverlayTouchable}
             activeOpacity={1}
-            onPress={() => setSelectedCastMember(null)}
-          >
-            <View 
+            onPress={handleCloseCastModal}
+          />
+          <GestureDetector gesture={castPanGesture}>
+            <Animated.View 
               style={[
                 styles.modalContent,
-                {
-                  transform: [{ translateY: modalOffset }]
-                }
+                modalAnimatedStyle
               ]}
-              onStartShouldSetResponder={() => true}
-              onResponderGrant={() => {
-                setIsDragging(true);
-              }}
-              onResponderMove={(evt) => {
-                const { locationY } = evt.nativeEvent;
-                const offset = Math.max(0, locationY);
-                setModalOffset(offset);
-              }}
-              onResponderRelease={(evt) => {
-                const { locationY } = evt.nativeEvent;
-                setIsDragging(false);
-                if (locationY > 100) {
-                  setSelectedCastMember(null);
-                }
-                setModalOffset(0);
-              }}
             >
               <View style={styles.modalDragHandle} />
               <TouchableOpacity
                 style={styles.modalCloseButton}
-                onPress={() => setSelectedCastMember(null)}
+                onPress={handleCloseCastModal}
               >
                 <MaterialIcons name="close" size={24} color="#fff" />
               </TouchableOpacity>
@@ -1201,7 +1218,11 @@ const MetadataScreen = () => {
                   <View style={styles.modalImageContainer}>
                     {selectedCastMember.profile_path && tmdbService.getImageUrl(selectedCastMember.profile_path, 'w300') ? (
                       <FastImage
-                        source={{ uri: tmdbService.getImageUrl(selectedCastMember.profile_path, 'w300')! }}
+                        source={{ 
+                          uri: tmdbService.getImageUrl(selectedCastMember.profile_path, 'w300')!,
+                          priority: FastImage.priority.normal,
+                          cache: FastImage.cacheControl.immutable
+                        }}
                         style={styles.modalImage}
                         resizeMode={FastImage.resizeMode.cover}
                       />
@@ -1250,12 +1271,12 @@ const MetadataScreen = () => {
                   </View>
                 )}
               </ScrollView>
-            </View>
-          </TouchableOpacity>
-        </View>
-      </Modal>
+            </Animated.View>
+          </GestureDetector>
+        </Animated.View>
+      </View>
     );
-  };
+  }, [selectedCastMember, loadingCastDetails, backgroundAnimatedStyle, modalAnimatedStyle, castPanGesture, handleCloseCastModal]);
 
   const renderStreamFilters = () => {
     return (
@@ -1452,7 +1473,11 @@ const MetadataScreen = () => {
 
                 {metadata.logo ? (
                   <FastImage
-                    source={{ uri: metadata.logo }}
+                    source={{ 
+                      uri: metadata.logo,
+                      priority: FastImage.priority.normal,
+                      cache: FastImage.cacheControl.immutable
+                    }}
                     style={styles.titleLogo}
                     resizeMode={FastImage.resizeMode.contain}
                   />
@@ -1689,7 +1714,8 @@ const MetadataScreen = () => {
           </TouchableOpacity>
         )}
 
-        {renderCastModal()}
+        {/* Cast Modal */}
+        {selectedCastMember && renderCastModal()}
       </GestureHandlerRootView>
     </SafeAreaView>
   );
@@ -2193,13 +2219,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   modalContainer: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    ...StyleSheet.absoluteFillObject,
     justifyContent: 'flex-end',
+    zIndex: 1000,
   },
   modalOverlay: {
     flex: 1,
     justifyContent: 'flex-end',
+    backgroundColor: 'transparent',
+  },
+  modalOverlayTouchable: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   modalContent: {
     backgroundColor: '#141414',
@@ -2207,6 +2238,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
     maxHeight: '90%',
     width: '100%',
+    overflow: 'hidden',
   },
   modalDragHandle: {
     width: 40,

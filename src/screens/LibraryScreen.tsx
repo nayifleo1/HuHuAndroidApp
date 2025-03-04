@@ -13,6 +13,8 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { colors } from '../styles/colors';
+import FastImage from '@d11/react-native-fast-image';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 // Types
 interface LibraryItem {
@@ -167,11 +169,25 @@ const LibraryScreen = () => {
       </View>
 
       {loading ? (
-        <View style={styles.loadingContainer}>
+        <Animated.View 
+          entering={FadeIn.duration(300).withInitialValues({ opacity: 0 })}
+          exiting={FadeOut.duration(300)}
+          style={[
+            styles.loadingContainer,
+            { backgroundColor: isDarkMode ? '#000000' : '#F5F5F5' }
+          ]}
+        >
           <ActivityIndicator size="large" color={colors.primary} />
-        </View>
+        </Animated.View>
       ) : filteredItems.length === 0 ? (
-        <View style={styles.emptyContainer}>
+        <Animated.View 
+          entering={FadeIn.duration(300).withInitialValues({ opacity: 0 })}
+          exiting={FadeOut.duration(300)}
+          style={[
+            styles.emptyContainer,
+            { backgroundColor: isDarkMode ? '#000000' : '#F5F5F5' }
+          ]}
+        >
           <MaterialIcons name="video-library" size={64} color={isDarkMode ? '#444444' : '#CCCCCC'} />
           <Text style={[styles.emptyText, { color: isDarkMode ? '#AAAAAA' : '#777777' }]}>
             Your library is empty
@@ -179,16 +195,26 @@ const LibraryScreen = () => {
           <Text style={[styles.emptySubtext, { color: isDarkMode ? '#888888' : '#999999' }]}>
             Add items to your library by marking them as favorites in metadata view
           </Text>
-        </View>
+        </Animated.View>
       ) : (
-        <FlatList
-          data={filteredItems}
-          renderItem={renderItem}
-          keyExtractor={item => item.id}
-          numColumns={2}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-        />
+        <Animated.View
+          entering={FadeIn.duration(300).withInitialValues({ opacity: 0 })}
+          exiting={FadeOut.duration(300)}
+          style={{ flex: 1, backgroundColor: isDarkMode ? '#000000' : '#F5F5F5' }}
+        >
+          <FlatList
+            data={filteredItems}
+            renderItem={renderItem}
+            keyExtractor={item => item.id}
+            numColumns={2}
+            contentContainerStyle={[
+              styles.listContent,
+              { backgroundColor: isDarkMode ? '#000000' : '#F5F5F5' }
+            ]}
+            style={{ backgroundColor: isDarkMode ? '#000000' : '#F5F5F5' }}
+            showsVerticalScrollIndicator={false}
+          />
+        </Animated.View>
       )}
     </View>
   );
@@ -236,6 +262,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     aspectRatio: 2/3,
     marginBottom: 8,
+    backgroundColor: 'transparent',
   },
   poster: {
     width: '100%',
