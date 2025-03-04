@@ -193,6 +193,10 @@ const MetadataScreen = () => {
     easing: Easing.bezier(0.33, 1, 0.68, 1) // Custom easing for smooth motion
   };
 
+  // Add new state for season change loading
+  const [changingSeasons, setChangingSeasons] = useState(false);
+  const fadeAnim = useSharedValue(1);
+
   const restoreScrollPosition = useCallback(() => {
     if (contentRef.current) {
       contentRef.current.scrollTo({ y: savedScrollPosition, animated: false });
@@ -326,6 +330,50 @@ const MetadataScreen = () => {
       const cachedMetadata = cacheService.getMetadata(id, type);
       if (cachedMetadata) {
         setMetadata(cachedMetadata);
+        
+        // If it's a series, load episodes from TMDB
+        if (type === 'series') {
+          setLoadingSeasons(true);
+          try {
+            // Get TMDB ID from IMDB ID
+            const tmdbIdResult = await tmdbService.findTMDBIdByIMDB(id);
+            if (tmdbIdResult) {
+              setTmdbId(tmdbIdResult);
+              // Get all episodes
+              const allEpisodes = await tmdbService.getAllEpisodes(tmdbIdResult);
+              
+              // Get show details to access season posters
+              const showDetails = await tmdbService.getTVShowDetails(tmdbIdResult);
+              
+              // Transform TMDBEpisode objects into Episode objects
+              const transformedEpisodes: GroupedEpisodes = {};
+              Object.entries(allEpisodes).forEach(([season, episodes]) => {
+                // Find season poster from show details
+                const seasonInfo = showDetails?.seasons?.find(s => s.season_number === parseInt(season));
+                const seasonPosterPath = seasonInfo?.poster_path;
+                
+                transformedEpisodes[parseInt(season)] = episodes.map(episode => ({
+                  ...episode,
+                  episodeString: `S${episode.season_number.toString().padStart(2, '0')}E${episode.episode_number.toString().padStart(2, '0')}`,
+                  season_poster_path: seasonPosterPath || null
+                }));
+              });
+              
+              setGroupedEpisodes(transformedEpisodes);
+              
+              // Set initial season episodes
+              const firstSeason = Math.min(...Object.keys(allEpisodes).map(Number));
+              const initialEpisodes = transformedEpisodes[firstSeason] || [];
+              setSelectedSeason(firstSeason);
+              setEpisodes(initialEpisodes);
+            }
+          } catch (error) {
+            console.error('Failed to load episodes:', error);
+          } finally {
+            setLoadingSeasons(false);
+          }
+        }
+        
         setLoading(false);
         return;
       }
@@ -335,6 +383,49 @@ const MetadataScreen = () => {
         setMetadata(content);
         // Cache the metadata
         cacheService.setMetadata(id, type, content);
+        
+        // If it's a series, load episodes from TMDB
+        if (type === 'series') {
+          setLoadingSeasons(true);
+          try {
+            // Get TMDB ID from IMDB ID
+            const tmdbIdResult = await tmdbService.findTMDBIdByIMDB(id);
+            if (tmdbIdResult) {
+              setTmdbId(tmdbIdResult);
+              // Get all episodes
+              const allEpisodes = await tmdbService.getAllEpisodes(tmdbIdResult);
+              
+              // Get show details to access season posters
+              const showDetails = await tmdbService.getTVShowDetails(tmdbIdResult);
+              
+              // Transform TMDBEpisode objects into Episode objects
+              const transformedEpisodes: GroupedEpisodes = {};
+              Object.entries(allEpisodes).forEach(([season, episodes]) => {
+                // Find season poster from show details
+                const seasonInfo = showDetails?.seasons?.find(s => s.season_number === parseInt(season));
+                const seasonPosterPath = seasonInfo?.poster_path;
+                
+                transformedEpisodes[parseInt(season)] = episodes.map(episode => ({
+                  ...episode,
+                  episodeString: `S${episode.season_number.toString().padStart(2, '0')}E${episode.episode_number.toString().padStart(2, '0')}`,
+                  season_poster_path: seasonPosterPath || null
+                }));
+              });
+              
+              setGroupedEpisodes(transformedEpisodes);
+              
+              // Set initial season episodes
+              const firstSeason = Math.min(...Object.keys(allEpisodes).map(Number));
+              const initialEpisodes = transformedEpisodes[firstSeason] || [];
+              setSelectedSeason(firstSeason);
+              setEpisodes(initialEpisodes);
+            }
+          } catch (error) {
+            console.error('Failed to load episodes:', error);
+          } finally {
+            setLoadingSeasons(false);
+          }
+        }
       } else {
         setError('Content not found');
       }
@@ -457,12 +548,21 @@ const MetadataScreen = () => {
     }
   };
 
-  // Add back handleSeasonChange
+  // Update handleSeasonChange
   const handleSeasonChange = (seasonNumber: number) => {
     if (selectedSeason === seasonNumber) return;
     
+    setChangingSeasons(true);
+    // Update metadata first
     setSelectedSeason(seasonNumber);
     setEpisodes(groupedEpisodes[seasonNumber] || []);
+    
+    // Then handle animation
+    fadeAnim.value = withTiming(0, { duration: 100 }, () => {
+      fadeAnim.value = withTiming(1, { duration: 150 }, () => {
+        runOnJS(setChangingSeasons)(false);
+      });
+    });
   };
 
   const loadEpisodeStreams = async (episodeId: string) => {
@@ -600,106 +700,115 @@ const MetadataScreen = () => {
     loadEpisodeStreams(episodeId);
   };
 
-  // Memoize the episode rendering to avoid unnecessary re-renders
+  // Create the animated style outside the render function
+  const episodeCardAnimatedStyle = useAnimatedStyle(() => {
+    return {
+      opacity: fadeAnim.value,
+      transform: [{ scale: 0.95 + (fadeAnim.value * 0.05) }]
+    };
+  }, []);
+
+  // Update episode card rendering with FastImage and animation
   const renderEpisodeCard = useCallback((episode: Episode) => {
     const isSelected = selectedEpisode === (episode.stremioId || `${id}:${episode.season_number}:${episode.episode_number}`);
     
     // Get episode image from TMDB
     let episodeImage = null;
     if (episode.still_path) {
-      episodeImage = tmdbService.getImageUrl(episode.still_path, 'original');
+      episodeImage = tmdbService.getImageUrl(episode.still_path, 'w300');
     } else if (metadata?.poster) {
       episodeImage = metadata.poster;
     }
     
-    // Format the air date
-    const formattedAirDate = tmdbService.formatAirDate(episode.air_date);
-    
-    // Check if this image is loading
-    const imageKey = episodeImage || '';
-    const isImageLoading = episodeImage ? loadingImages.current.has(imageKey) : false;
-    
-    // Image loading handlers
-    const handleImageLoadStart = () => {
-      if (episodeImage) {
-        loadingImages.current.add(imageKey);
-      }
-    };
-    
-    const handleImageLoadEnd = () => {
-      if (episodeImage) {
-        loadingImages.current.delete(imageKey);
-      }
-    };
-    
     return (
-      <TouchableOpacity 
-        style={[
-          styles.episodeCard,
-          isSelected && styles.episodeCardSelected
-        ]} 
-        onPress={() => handleEpisodeSelect(episode)}
-      >
-        <View style={styles.episodeImageContainer}>
-          {episodeImage ? (
-            <>
-              <View style={[styles.episodeImage, styles.episodeImagePlaceholder]}>
-                <MaterialIcons name="movie" size={24} color="rgba(255,255,255,0.5)" />
-              </View>
-              {isImageLoading && (
-                <View style={[styles.episodeImageLoading, { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }]}>
-                  <ActivityIndicator size="small" color={colors.primary} />
-                </View>
-              )}
-              <FastImage 
-                source={{ uri: episodeImage }}
-                style={[styles.episodeImage, { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }]}
+      <Animated.View style={[styles.episodeContainer, episodeCardAnimatedStyle]}>
+        <TouchableOpacity
+          onPress={() => handleEpisodeSelect(episode)}
+          style={[
+            styles.episodeCard,
+            isSelected && styles.episodeCardSelected
+          ]}
+        >
+          <View style={styles.episodeImageContainer}>
+            {episodeImage ? (
+              <FastImage
+                source={{
+                  uri: episodeImage,
+                  priority: FastImage.priority.normal,
+                  cache: FastImage.cacheControl.immutable
+                }}
+                style={styles.episodeImage}
                 resizeMode={FastImage.resizeMode.cover}
-                onLoadStart={handleImageLoadStart}
-                onLoadEnd={handleImageLoadEnd}
-                onError={handleImageLoadEnd}
               />
-            </>
-          ) : (
-            <View style={[styles.episodeImage, styles.episodeImagePlaceholder]}>
-              <MaterialIcons name="movie" size={24} color="rgba(255,255,255,0.5)" />
+            ) : (
+              <View style={[styles.episodeImage, styles.episodeImagePlaceholder]}>
+                <MaterialIcons name="image" size={24} color="#666" />
+              </View>
+            )}
+            <View style={styles.episodeNumberBadge}>
+              <Text style={styles.episodeNumberText}>{episode.episode_number}</Text>
             </View>
-          )}
-          <View style={styles.episodeNumberBadge}>
-            <Text style={styles.episodeNumberText}>{episode.episode_number}</Text>
           </View>
-        </View>
-        
-        <View style={styles.episodeInfo}>
-          <View style={styles.episodeHeader}>
-            <Text style={styles.episodeNumber}>{episode.episodeString}</Text>
+
+          <View style={styles.episodeInfo}>
+            <View style={styles.episodeHeader}>
+              <Text style={styles.episodeNumber}>{episode.episodeString}</Text>
+            </View>
+            <Text style={styles.episodeTitle} numberOfLines={2}>
+              {episode.name}
+            </Text>
+            {episode.air_date && (
+              <Text style={styles.episodeReleased}>
+                {new Date(episode.air_date).toLocaleDateString()}
+              </Text>
+            )}
             {episode.vote_average > 0 && (
               <View style={styles.episodeRating}>
                 <MaterialIcons name="star" size={12} color="#FFD700" />
-                <Text style={styles.episodeRatingText}>{episode.vote_average.toFixed(1)}</Text>
+                <Text style={styles.episodeRatingText}>
+                  {episode.vote_average.toFixed(1)}
+                </Text>
               </View>
             )}
           </View>
-          
-          <Text 
-            style={styles.episodeTitle}
-            numberOfLines={2}
-          >
-            {episode.name}
-          </Text>
-          
-          <Text style={styles.episodeReleased}>{formattedAirDate}</Text>
-        </View>
-        
-        <MaterialIcons 
-          name="chevron-right" 
-          size={24} 
-          color={isDarkMode ? "#fff" : "#000"}
-          style={styles.episodeExpandIcon}
-        />
-      </TouchableOpacity>
+        </TouchableOpacity>
+      </Animated.View>
     );
-  }, [metadata, selectedEpisode, isDarkMode, handleEpisodeSelect]);
+  }, [selectedEpisode, metadata?.poster, handleEpisodeSelect, episodeCardAnimatedStyle]);
+
+  // Update episodes section rendering to show loading state
+  const renderEpisodesSection = useCallback(() => {
+    if (loadingSeasons) {
+      return (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Loading episodes...</Text>
+        </View>
+      );
+    }
+
+    if (episodes.length === 0) {
+      return (
+        <View style={styles.noEpisodes}>
+          <MaterialIcons name="error-outline" size={48} color="#666" />
+          <Text style={styles.noEpisodesText}>No episodes available</Text>
+        </View>
+      );
+    }
+
+    return (
+      <>
+        <Text style={styles.episodesSectionTitle}>
+          {episodes.length} Episodes
+        </Text>
+        {episodes.map((episode) => (
+          <View key={episode.id}>
+            {renderEpisodeCard(episode)}
+          </View>
+        ))}
+      </>
+    );
+  }, [episodes, loadingSeasons, renderEpisodeCard]);
 
   const handlePlayStream = async (stream: Stream) => {
     if (settings.useExternalPlayer) {
