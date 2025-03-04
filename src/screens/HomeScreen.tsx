@@ -22,7 +22,25 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import FastImage from '@d11/react-native-fast-image';
 import { colors } from '../styles/colors';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import Animated, {
+  FadeIn,
+  FadeOut,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+  interpolate,
+  Extrapolate,
+  runOnJS,
+  cancelAnimation,
+  Easing,
+  withDelay
+} from 'react-native-reanimated';
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView
+} from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Define interfaces for our data
@@ -88,6 +106,214 @@ const HomeScreen = () => {
   const [catalogs, setCatalogs] = useState<CatalogContent[]>([]);
   const maxRetries = 3;
   const [lastSettingsUpdate, setLastSettingsUpdate] = useState<number>(Date.now());
+  const [autoPlayEnabled, setAutoPlayEnabled] = useState(true);
+  const autoPlayInterval = 8000; // 8 seconds for more comfortable viewing
+
+  // Add new animated values for hero section
+  const translateX = useSharedValue(0);
+  const logoTranslateX = useSharedValue(0);
+  const logoTranslateY = useSharedValue(0);
+  const logoScale = useSharedValue(1);
+  const logoOpacity = useSharedValue(1);
+  const imageOpacity = useSharedValue(1);
+  const currentIndex = useSharedValue(0);
+
+  // Add preloading state
+  const [preloadedImages, setPreloadedImages] = useState<Set<string>>(new Set());
+
+  const springConfig = {
+    damping: 20,
+    mass: 1,
+    stiffness: 90
+  };
+
+  // Preload function for thumbnails
+  const preloadThumbnails = useCallback((contents: StreamingContent[]) => {
+    if (!contents.length) return;
+
+    const imagesToPreload = contents.map(content => ({
+      uri: content.banner || content.poster,
+      priority: FastImage.priority.high,
+    }));
+
+    // Also preload logos if available
+    const logosToPreload = contents
+      .filter(content => content.logo)
+      .map(content => ({
+        uri: content.logo!,
+        priority: FastImage.priority.high,
+      }));
+
+    FastImage.preload([...imagesToPreload, ...logosToPreload]);
+
+    // Keep track of preloaded images
+    setPreloadedImages(new Set(
+      [...imagesToPreload, ...logosToPreload].map(img => img.uri)
+    ));
+  }, []);
+
+  // Preload next and previous images
+  const preloadAdjacentContent = useCallback((currentIdx: number) => {
+    if (!allFeaturedContent.length) return;
+
+    const nextIdx = (currentIdx + 1) % allFeaturedContent.length;
+    const prevIdx = currentIdx === 0 ? allFeaturedContent.length - 1 : currentIdx - 1;
+    
+    const adjacentContent = [
+      allFeaturedContent[nextIdx],
+      allFeaturedContent[prevIdx]
+    ];
+
+    preloadThumbnails(adjacentContent);
+  }, [allFeaturedContent, preloadThumbnails]);
+
+  // Update the prepareNextContent function for smoother transitions
+  const prepareNextContent = useCallback((nextIndex: number) => {
+    'worklet';
+    // Reset position and scale immediately
+    logoTranslateX.value = 0;
+    logoScale.value = 1;
+    
+    // Update content and index
+    runOnJS(setFeaturedContent)(allFeaturedContent[nextIndex]);
+    currentIndex.value = nextIndex;
+  }, [allFeaturedContent]);
+
+  const nextContent = useCallback(() => {
+    'worklet';
+    if (allFeaturedContent.length > 0) {
+      const nextIndex = (currentIndex.value + 1) % allFeaturedContent.length;
+      
+      // Quick fade out for smooth transition
+      const fadeOutConfig = {
+        duration: 300,
+        easing: Easing.bezier(0.4, 0, 0.2, 1)
+      };
+      
+      // Start fade out
+      logoOpacity.value = withTiming(0, {
+        duration: 200,
+        easing: Easing.bezier(0.4, 0, 0.2, 1)
+      });
+      
+      imageOpacity.value = withTiming(0, fadeOutConfig, () => {
+        prepareNextContent(nextIndex);
+      });
+    }
+  }, [allFeaturedContent, prepareNextContent]);
+
+  const prevContent = useCallback(() => {
+    'worklet';
+    if (allFeaturedContent.length > 0) {
+      const prevIndex = currentIndex.value === 0 
+        ? allFeaturedContent.length - 1 
+        : currentIndex.value - 1;
+      
+      // Quick fade out for smooth transition
+      const fadeOutConfig = {
+        duration: 300,
+        easing: Easing.bezier(0.4, 0, 0.2, 1)
+      };
+      
+      // Start fade out
+      logoOpacity.value = withTiming(0, {
+        duration: 200,
+        easing: Easing.bezier(0.4, 0, 0.2, 1)
+      });
+      
+      imageOpacity.value = withTiming(0, fadeOutConfig, () => {
+        prepareNextContent(prevIndex);
+      });
+    }
+  }, [allFeaturedContent, prepareNextContent]);
+
+  // Pan gesture for hero section
+  const panGesture = Gesture.Pan()
+    .onBegin(() => {
+      'worklet';
+      runOnJS(setAutoPlayEnabled)(false);
+      cancelAnimation(translateX);
+      cancelAnimation(logoTranslateX);
+      cancelAnimation(logoScale);
+      cancelAnimation(logoOpacity);
+      cancelAnimation(imageOpacity);
+    })
+    .onUpdate((event) => {
+      'worklet';
+      // Only move the logo horizontally
+      logoTranslateX.value = event.translationX * 1.2;
+      
+      // Scale but don't fade during swipe
+      const progress = Math.abs(event.translationX) / (width * 0.4);
+      logoScale.value = 1 - (progress * 0.1);
+      
+      // Keep opacity constant during swipe
+      logoOpacity.value = 1;
+      imageOpacity.value = 1;
+    })
+    .onEnd((event) => {
+      'worklet';
+      const shouldSwipe = Math.abs(event.velocityX) > 500 || 
+                         Math.abs(event.translationX) > width * 0.3;
+      
+      if (shouldSwipe) {
+        // Smooth fade out with optimized timing
+        const fadeOutConfig = {
+          duration: 200,
+          easing: Easing.bezier(0.33, 0, 0.67, 1)
+        };
+        
+        // Coordinate fade out with content change
+        logoOpacity.value = withTiming(0, fadeOutConfig);
+        imageOpacity.value = withTiming(0, fadeOutConfig, () => {
+          if (event.translationX > 0) {
+            prevContent();
+          } else {
+            nextContent();
+          }
+          runOnJS(setAutoPlayEnabled)(true);
+        });
+        
+        // Add spring animation for logo movement during fade
+        logoTranslateX.value = withSpring(
+          event.translationX > 0 ? width : -width,
+          {
+            damping: 15,
+            mass: 0.5,
+            stiffness: 120,
+            velocity: event.velocityX
+          }
+        );
+      } else {
+        // Reset with spring animation
+        logoTranslateX.value = withSpring(0, {
+          damping: 15,
+          mass: 0.5,
+          stiffness: 120
+        });
+        logoScale.value = withSpring(1, {
+          damping: 15,
+          mass: 0.5,
+          stiffness: 120
+        });
+        
+        runOnJS(setAutoPlayEnabled)(true);
+      }
+    });
+
+  // Animated styles
+  const heroAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: imageOpacity.value
+  }));
+
+  const logoAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: logoTranslateX.value },
+      { translateY: logoTranslateY.value },
+      { scale: logoScale.value }
+    ],
+    opacity: logoOpacity.value
+  }));
 
   // Function to check if settings have been updated
   const checkSettingsUpdate = useCallback(async () => {
@@ -105,21 +331,7 @@ const HomeScreen = () => {
     }
   }, [lastSettingsUpdate]);
 
-  // Function to rotate featured content
-  const rotateFeaturedContent = useCallback(() => {
-    if (allFeaturedContent.length > 0) {
-      const currentIndex = allFeaturedContent.findIndex(item => item.id === featuredContent?.id);
-      const nextIndex = (currentIndex + 1) % allFeaturedContent.length;
-      setFeaturedContent(allFeaturedContent[nextIndex]);
-    }
-  }, [allFeaturedContent, featuredContent]);
-
-  // Set up rotation interval
-  useEffect(() => {
-    const interval = setInterval(rotateFeaturedContent, 10000); // Rotate every 10 seconds
-    return () => clearInterval(interval);
-  }, [rotateFeaturedContent]);
-
+  // Update loadContent to include preloading
   const loadContent = useCallback(async () => {
     try {
       setLoading(true);
@@ -161,6 +373,7 @@ const HomeScreen = () => {
             setAllFeaturedContent(popularCatalog.items);
             const randomIndex = Math.floor(Math.random() * popularCatalog.items.length);
             setFeaturedContent(popularCatalog.items[randomIndex]);
+            preloadThumbnails(popularCatalog.items);
           } else if (cinemetaCatalogs.length > 0 && cinemetaCatalogs[0].items.length > 0) {
             // Fall back to first Cinemeta catalog
             setAllFeaturedContent(cinemetaCatalogs[0].items);
@@ -192,7 +405,7 @@ const HomeScreen = () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [maxRetries]);
+  }, [maxRetries, preloadThumbnails]);
 
   // Reset retry count when refreshing manually
   const handleRefresh = useCallback(() => {
@@ -226,109 +439,173 @@ const HomeScreen = () => {
     }, [loadContent, checkSettingsUpdate, catalogs.length])
   );
 
+  // Preload adjacent content when current content changes
+  useEffect(() => {
+    if (featuredContent && allFeaturedContent.length > 0) {
+      const currentIdx = allFeaturedContent.findIndex(
+        content => content.id === featuredContent.id
+      );
+      if (currentIdx !== -1) {
+        preloadAdjacentContent(currentIdx);
+      }
+    }
+  }, [featuredContent, allFeaturedContent, preloadAdjacentContent]);
+
+  // Add auto-play functionality
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+
+    if (autoPlayEnabled && allFeaturedContent.length > 1) {
+      intervalId = setInterval(() => {
+        nextContent();
+      }, autoPlayInterval);
+    }
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [autoPlayEnabled, allFeaturedContent.length, nextContent]);
+
+  // Add touch handlers to pause auto-play
+  const handleTouchStart = useCallback(() => {
+    setAutoPlayEnabled(false);
+  }, []);
+
+  const handleTouchEnd = useCallback(() => {
+    setAutoPlayEnabled(true);
+  }, []);
+
   const handleCategoryChange = (categoryId: string) => {
     setSelectedCategory(categoryId);
   };
 
+  // Update renderFeaturedContent to optimize image loading
   const renderFeaturedContent = () => {
     if (!featuredContent) return null;
 
-    return (
-      <TouchableOpacity
-        style={styles.featuredContainer}
-        activeOpacity={0.9}
-        onPress={() => navigation.navigate('Metadata', { 
-          id: featuredContent.id, 
-          type: featuredContent.type
-        })}
-      >
-        <ImageBackground
-          source={{ uri: featuredContent.banner || featuredContent.poster }}
-          style={styles.featuredBanner}
-          resizeMode="cover"
-        >
-          <LinearGradient
-            colors={[
-              'rgba(0,0,0,0)',
-              'rgba(0,0,0,0.4)',
-              'rgba(0,0,0,0.8)',
-              'rgba(0,0,0,0.95)',
-              '#000'
-            ]}
-            locations={[0, 0.3, 0.75, 0.9, 1]}
-            style={styles.featuredGradient}
-          >
-            <View style={styles.featuredContent}>
-              {featuredContent.logo ? (
-                <FastImage
-                  source={{ uri: featuredContent.logo }}
-                  style={styles.featuredLogo}
-                  resizeMode={FastImage.resizeMode.contain}
-                />
-              ) : (
-                <Text style={styles.featuredTitle}>{featuredContent.name}</Text>
-              )}
-              
-              {featuredContent.genres && featuredContent.genres.length > 0 && (
-                <View style={styles.genreContainer}>
-                  {featuredContent.genres.slice(0, 3).map((genre, index) => (
-                    <View key={index} style={styles.genreChip}>
-                      <Text style={styles.genreText}>{genre}</Text>
-                    </View>
-                  ))}
-                </View>
-              )}
-              
-              <View style={styles.featuredMeta}>
-                {featuredContent.year && (
-                  <View style={styles.yearChip}>
-                    <Text style={styles.yearText}>{featuredContent.year}</Text>
-                  </View>
-                )}
-                {featuredContent.imdbRating && (
-                  <View style={styles.ratingContainer}>
-                    <Image 
-                      source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/IMDB_Logo_2016.svg/575px-IMDB_Logo_2016.svg.png' }}
-                      style={styles.imdbLogo}
-                    />
-                    <Text style={styles.ratingText}>{featuredContent.imdbRating}</Text>
-                  </View>
-                )}
-              </View>
+    const imageUri = featuredContent.banner || featuredContent.poster;
 
-              {featuredContent.description && (
-                <Text style={styles.description} numberOfLines={3}>
-                  {featuredContent.description}
-                </Text>
-              )}
-              
-              <View style={styles.featuredButtons}>
-                <TouchableOpacity 
-                  style={[styles.featuredButton, styles.playButton]}
-                  onPress={() => navigation.navigate('Player', { 
-                    id: featuredContent?.id, 
-                    type: featuredContent?.type
-                  })}
-                >
-                  <MaterialIcons name="play-arrow" color="#000000" size={24} />
-                  <Text style={styles.playButtonText}>Play</Text>
-                </TouchableOpacity>
+    return (
+      <GestureDetector gesture={panGesture}>
+        <View style={styles.featuredContainer}>
+          <Animated.View style={[styles.featuredBannerContainer, heroAnimatedStyle]}>
+            <FastImage
+              source={{ 
+                uri: imageUri,
+                priority: FastImage.priority.high,
+                cache: FastImage.cacheControl.immutable
+              }}
+              style={styles.featuredBanner}
+              resizeMode={FastImage.resizeMode.cover}
+              onLoadEnd={() => {
+                // Quick fade in for thumbnail, delayed fade for logo
+                const fadeInConfig = {
+                  duration: 300,
+                  easing: Easing.bezier(0.4, 0, 0.2, 1)
+                };
                 
-                <TouchableOpacity 
-                  style={[styles.featuredButton, styles.infoButton]}
-                  onPress={() => navigation.navigate('Metadata', { 
-                    id: featuredContent?.id, 
-                    type: featuredContent?.type
-                  })}
+                // Quick but smooth thumbnail fade-in
+                imageOpacity.value = withTiming(1, {
+                  duration: 150,
+                  easing: Easing.bezier(0.4, 0, 0.6, 1)
+                });
+                
+                // Add longer delay for logo with smooth fade
+                logoOpacity.value = withDelay(400, withTiming(1, {
+                  duration: 400,
+                  easing: Easing.bezier(0.4, 0, 0.2, 1)
+                }));
+              }}
+            >
+              <TouchableOpacity
+                activeOpacity={1}
+                style={styles.featuredTouchable}
+                onPress={() => navigation.navigate('Metadata', { 
+                  id: featuredContent.id, 
+                  type: featuredContent.type
+                })}
+              >
+                <LinearGradient
+                  colors={[
+                    'rgba(0,0,0,0.4)',
+                    'rgba(0,0,0,0.6)',
+                    'rgba(0,0,0,0.75)',
+                    'rgba(0,0,0,0.85)',
+                    'rgba(0,0,0,0.95)',
+                    '#000'
+                  ]}
+                  locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
+                  style={styles.featuredGradient}
                 >
-                  <MaterialIcons name="info-outline" color="#FFFFFF" size={20} />
-                  <Text style={styles.infoButtonText}>More Info</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </LinearGradient>
-        </ImageBackground>
-      </TouchableOpacity>
+                  <View style={styles.featuredContent}>
+                    <Animated.View style={logoAnimatedStyle}>
+                      {featuredContent.logo ? (
+                        <FastImage
+                          source={{ 
+                            uri: featuredContent.logo,
+                            priority: FastImage.priority.high,
+                            cache: FastImage.cacheControl.immutable
+                          }}
+                          style={styles.titleLogo}
+                          resizeMode={FastImage.resizeMode.contain}
+                        />
+                      ) : (
+                        <Text style={styles.titleText}>{featuredContent.name}</Text>
+                      )}
+                    </Animated.View>
+
+                    {/* Rest of the featured content */}
+                    {featuredContent.genres && featuredContent.genres.length > 0 && (
+                      <View style={styles.genreContainer}>
+                        {featuredContent.genres.slice(0, 3).map((genre, index) => (
+                          <View key={index} style={styles.genreChip}>
+                            <Text style={styles.genreText}>{genre}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+
+                    {featuredContent.description && (
+                      <Text style={styles.description} numberOfLines={3}>
+                        {featuredContent.description}
+                      </Text>
+                    )}
+
+                    <View style={styles.featuredButtons}>
+                      <TouchableOpacity
+                        style={[styles.button, styles.whiteButton]}
+                        onPress={() => navigation.navigate('Metadata', {
+                          id: featuredContent.id,
+                          type: featuredContent.type
+                        })}
+                      >
+                        <View style={styles.buttonInner}>
+                          <MaterialIcons name="play-arrow" size={24} color="#000" />
+                          <Text style={styles.whiteButtonText}>Play</Text>
+                        </View>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.button, styles.infoButton]}
+                        onPress={() => navigation.navigate('Metadata', {
+                          id: featuredContent.id,
+                          type: featuredContent.type
+                        })}
+                      >
+                        <View style={styles.buttonInner}>
+                          <MaterialIcons name="info-outline" size={24} color="#fff" />
+                          <Text style={styles.buttonText}>More Info</Text>
+                        </View>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </LinearGradient>
+              </TouchableOpacity>
+            </FastImage>
+          </Animated.View>
+        </View>
+      </GestureDetector>
     );
   };
 
@@ -430,6 +707,8 @@ const HomeScreen = () => {
         }
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
       >
         {/* Featured Content */}
         {renderFeaturedContent()}
@@ -577,25 +856,39 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 100,
   },
-  playButton: {
-    backgroundColor: '#FFFFFF',
+  button: {
+    flex: 1,
+    height: 48,
+    borderRadius: 24,
+    overflow: 'hidden',
+    marginHorizontal: 6,
   },
-  playButtonText: {
-    color: '#000000',
-    fontWeight: '600',
-    marginLeft: 8,
+  buttonInner: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  buttonText: {
+    color: '#fff',
     fontSize: 16,
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  whiteButton: {
+    backgroundColor: '#ffffff',
+  },
+  whiteButtonText: {
+    color: '#000',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginLeft: 8,
   },
   infoButton: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-  },
-  infoButtonText: {
-    color: '#FFFFFF',
-    marginLeft: 8,
-    fontWeight: '600',
-    fontSize: 16,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
   catalogContainer: {
     marginBottom: 24,
@@ -704,6 +997,28 @@ const styles = StyleSheet.create({
   skeletonPoster: {
     backgroundColor: 'rgba(255,255,255,0.1)',
     marginHorizontal: 4,
+  },
+  featuredBannerContainer: {
+    width: '100%',
+    height: '100%',
+  },
+  titleLogo: {
+    width: width * 0.6,
+    height: 60,
+    marginBottom: 16,
+  },
+  titleText: {
+    color: '#fff',
+    fontSize: 32,
+    fontWeight: 'bold',
+    marginBottom: 16,
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 2, height: 2 },
+    textShadowRadius: 5,
+  },
+  featuredTouchable: {
+    flex: 1,
+    width: '100%',
   },
 });
 
