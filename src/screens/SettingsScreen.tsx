@@ -246,6 +246,21 @@ const SettingsScreen: React.FC = () => {
           )
         )}
 
+        {renderSectionHeader('Content')}
+        {renderSettingItem(
+          'Catalog Settings',
+          'Customize which catalogs appear on your home screen',
+          'view-list',
+          () => (
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: colors.primary }]}
+              onPress={() => navigation.navigate('CatalogSettings')}
+            >
+              <Text style={styles.actionButtonText}>Configure</Text>
+            </TouchableOpacity>
+          )
+        )}
+
         {renderSectionHeader('Account')}
         {renderSettingItem(
           'Account Settings',

@@ -109,7 +109,7 @@ class CatalogService {
   }
 
   async getAllAddons(): Promise<StreamingAddon[]> {
-    const addons = stremioService.getInstalledAddons();
+    const addons = await stremioService.getInstalledAddonsAsync();
     return addons.map(addon => this.convertManifestToStreamingAddon(addon));
   }
 
@@ -131,44 +131,65 @@ class CatalogService {
     const addons = await this.getAllAddons();
     const catalogs: CatalogContent[] = [];
 
+    // Get saved catalog settings
+    const savedSettings = await AsyncStorage.getItem('catalog_settings');
+    const catalogSettings: { [key: string]: boolean } = savedSettings ? JSON.parse(savedSettings) : {};
+
     // Get featured catalogs
     for (const addon of addons) {
       if (addon.catalogs && addon.catalogs.length > 0) {
-        // For Cinemeta, include more catalogs
-        const maxCatalogs = addon.id === 'com.linvo.cinemeta' ? 6 : 2;
-        const addonCatalogs = addon.catalogs.slice(0, maxCatalogs);
+        // For each catalog, check if it's enabled in settings
+        for (const catalog of addon.catalogs) {
+          const settingKey = `${addon.id}:${catalog.type}:${catalog.id}`;
+          // If setting doesn't exist, default to true for backward compatibility
+          const isEnabled = catalogSettings[settingKey] ?? true;
 
-        for (const catalog of addonCatalogs) {
-          try {
-            // Get the items for this catalog
-            const addonManifest = stremioService.getInstalledAddons().find(a => a.id === addon.id);
-            if (!addonManifest) continue;
+          if (isEnabled) {
+            try {
+              // Get the items for this catalog
+              const addonManifest = await stremioService.getInstalledAddonsAsync();
+              const manifest = addonManifest.find(a => a.id === addon.id);
+              if (!manifest) continue;
 
-            const metas = await stremioService.getCatalog(addonManifest, catalog.type, catalog.id, 1);
-            if (metas && metas.length > 0) {
-              // Convert Meta to StreamingContent
-              const items = metas.map(meta => this.convertMetaToStreamingContent(meta));
-              
-              // Format the catalog name to include the content type
-              let displayName = catalog.name;
-              if (addon.id === 'com.linvo.cinemeta') {
+              const metas = await stremioService.getCatalog(manifest, catalog.type, catalog.id, 1);
+              if (metas && metas.length > 0) {
+                // Convert Meta to StreamingContent
+                const items = metas.map(meta => this.convertMetaToStreamingContent(meta));
+                
+                // Format the catalog name
+                let displayName = catalog.name;
+                
+                // Remove duplicate words and clean up the name (case-insensitive)
+                const words = displayName.split(' ');
+                const uniqueWords = [];
+                const seenWords = new Set();
+                
+                for (const word of words) {
+                  const lowerWord = word.toLowerCase();
+                  if (!seenWords.has(lowerWord)) {
+                    uniqueWords.push(word); // Keep original case
+                    seenWords.add(lowerWord);
+                  }
+                }
+                displayName = uniqueWords.join(' ');
+                
+                // Add content type if not present
                 const contentType = catalog.type === 'movie' ? 'Movies' : 'TV Shows';
-                // Check if the name already includes the content type
-                if (!displayName.includes(contentType)) {
+                if (!displayName.toLowerCase().includes(contentType.toLowerCase())) {
                   displayName = `${displayName} ${contentType}`;
                 }
+                
+                catalogs.push({
+                  addon: addon.id,
+                  type: catalog.type,
+                  id: catalog.id,
+                  name: displayName,
+                  items
+                });
               }
-              
-              catalogs.push({
-                addon: addon.id,
-                type: catalog.type,
-                id: catalog.id,
-                name: displayName,
-                items
-              });
+            } catch (error) {
+              console.error(`Failed to get catalog ${catalog.id} for addon ${addon.id}:`, error);
             }
-          } catch (error) {
-            console.error(`Failed to get catalog ${catalog.id} for addon ${addon.id}:`, error);
           }
         }
       }
@@ -191,12 +212,13 @@ class CatalogService {
 
       for (const catalog of typeCatalogs) {
         try {
-          const addonManifest = stremioService.getInstalledAddons().find(a => a.id === addon.id);
-          if (!addonManifest) continue;
+          const addonManifest = await stremioService.getInstalledAddonsAsync();
+          const manifest = addonManifest.find(a => a.id === addon.id);
+          if (!manifest) continue;
 
           // Apply genre filter if provided
           const filters = genreFilter ? [{ title: 'genre', value: genreFilter }] : [];
-          const metas = await stremioService.getCatalog(addonManifest, type, catalog.id, 1, filters);
+          const metas = await stremioService.getCatalog(manifest, type, catalog.id, 1, filters);
           
           if (metas && metas.length > 0) {
             const items = metas.map(meta => this.convertMetaToStreamingContent(meta));
@@ -328,13 +350,14 @@ class CatalogService {
     for (const addon of addons) {
       if (addon.catalogs && addon.catalogs.length > 0) {
         for (const catalog of addon.catalogs) {
-          const addonManifest = stremioService.getInstalledAddons().find(a => a.id === addon.id);
-          if (!addonManifest) continue;
+          const addonManifest = await stremioService.getInstalledAddonsAsync();
+          const manifest = addonManifest.find(a => a.id === addon.id);
+          if (!manifest) continue;
 
           const searchPromise = (async () => {
             try {
               const filters = [{ title: 'search', value: query }];
-              const metas = await stremioService.getCatalog(addonManifest, catalog.type, catalog.id, 1, filters);
+              const metas = await stremioService.getCatalog(manifest, catalog.type, catalog.id, 1, filters);
               
               if (metas && metas.length > 0) {
                 const items = metas.map(meta => this.convertMetaToStreamingContent(meta));

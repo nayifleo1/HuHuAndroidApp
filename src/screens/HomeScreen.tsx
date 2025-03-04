@@ -16,13 +16,14 @@ import {
   Platform,
   Image
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { StreamingContent, CatalogContent, catalogService } from '../services/catalogService';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import FastImage from '@d11/react-native-fast-image';
 import { colors } from '../styles/colors';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Define interfaces for our data
 interface Category {
@@ -86,6 +87,23 @@ const HomeScreen = () => {
   const [allFeaturedContent, setAllFeaturedContent] = useState<StreamingContent[]>([]);
   const [catalogs, setCatalogs] = useState<CatalogContent[]>([]);
   const maxRetries = 3;
+  const [lastSettingsUpdate, setLastSettingsUpdate] = useState<number>(Date.now());
+
+  // Function to check if settings have been updated
+  const checkSettingsUpdate = useCallback(async () => {
+    try {
+      const savedSettings = await AsyncStorage.getItem('catalog_settings');
+      if (savedSettings) {
+        const settings = JSON.parse(savedSettings);
+        const timestamp = settings._lastUpdate || 0;
+        return timestamp > lastSettingsUpdate;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to check settings update:', error);
+      return false;
+    }
+  }, [lastSettingsUpdate]);
 
   // Function to rotate featured content
   const rotateFeaturedContent = useCallback(() => {
@@ -116,45 +134,28 @@ const HomeScreen = () => {
           // Load catalogs from service
           const homeCatalogs = await catalogService.getHomeCatalogs();
           
-          // Filter for Cinemeta catalogs only
-          const allCinemetaCatalogs = homeCatalogs.filter(catalog => 
-            catalog.addon === 'com.linvo.cinemeta'
-          );
-
           // If no catalogs found, wait and retry
-          if (allCinemetaCatalogs.length === 0) {
+          if (homeCatalogs.length === 0) {
             attempt++;
             console.log(`No catalogs found, retrying... (attempt ${attempt})`);
             await delay(2000); // Wait 2 seconds before next attempt
             continue;
           }
 
-          // Create a map to store unique catalogs by their content
-          const uniqueCatalogsMap = new Map();
+          // Set all catalogs
+          setCatalogs(homeCatalogs);
           
-          allCinemetaCatalogs.forEach(catalog => {
-            // Create a key based on the items' IDs to detect duplicate content
-            const contentKey = catalog.items.map(item => item.id).sort().join(',');
-            
-            // Only keep the first occurrence of each unique content collection
-            if (!uniqueCatalogsMap.has(contentKey)) {
-              uniqueCatalogsMap.set(contentKey, catalog);
-            }
-          });
+          // Find popular content from Cinemeta for featured section
+          const cinemetaCatalogs = homeCatalogs.filter(catalog => 
+            catalog.addon === 'com.linvo.cinemeta'
+          );
 
-          // Convert map back to array
-          const cinemetaCatalogs = Array.from(uniqueCatalogsMap.values());
-
-          // Find popular content from Cinemeta
           const popularCatalog = cinemetaCatalogs.find(catalog => 
             catalog.name.toLowerCase().includes('popular') || 
             catalog.name.toLowerCase().includes('top') ||
             catalog.id.toLowerCase().includes('top')
           );
 
-          // Set catalogs showing only unique Cinemeta content
-          setCatalogs(cinemetaCatalogs);
-          
           // Set featured content from popular Cinemeta content
           if (popularCatalog && popularCatalog.items.length > 0) {
             setAllFeaturedContent(popularCatalog.items);
@@ -165,6 +166,9 @@ const HomeScreen = () => {
             setAllFeaturedContent(cinemetaCatalogs[0].items);
             setFeaturedContent(cinemetaCatalogs[0].items[0]);
           }
+
+          // Update last settings update timestamp
+          setLastSettingsUpdate(Date.now());
 
           // If we get here, we've successfully loaded content
           return;
@@ -196,9 +200,31 @@ const HomeScreen = () => {
     loadContent();
   }, [loadContent]);
 
-  useEffect(() => {
-    loadContent();
-  }, [loadContent]);
+  // Add useFocusEffect to reload content only when settings have changed
+  useFocusEffect(
+    useCallback(() => {
+      let isSubscribed = true;
+
+      const checkAndLoadContent = async () => {
+        const shouldReload = await checkSettingsUpdate();
+        if (isSubscribed && shouldReload) {
+          loadContent();
+        }
+      };
+
+      if (!catalogs.length) {
+        // Initial load
+        loadContent();
+      } else {
+        // Check if we need to reload
+        checkAndLoadContent();
+      }
+
+      return () => {
+        isSubscribed = false;
+      };
+    }, [loadContent, checkSettingsUpdate, catalogs.length])
+  );
 
   const handleCategoryChange = (categoryId: string) => {
     setSelectedCategory(categoryId);
@@ -222,7 +248,14 @@ const HomeScreen = () => {
           resizeMode="cover"
         >
           <LinearGradient
-            colors={['rgba(0,0,0,0.1)', 'rgba(0,0,0,0.7)', 'rgba(0,0,0,0.95)']}
+            colors={[
+              'rgba(0,0,0,0)',
+              'rgba(0,0,0,0.4)',
+              'rgba(0,0,0,0.8)',
+              'rgba(0,0,0,0.95)',
+              '#000'
+            ]}
+            locations={[0, 0.3, 0.75, 0.9, 1]}
             style={styles.featuredGradient}
           >
             <View style={styles.featuredContent}>

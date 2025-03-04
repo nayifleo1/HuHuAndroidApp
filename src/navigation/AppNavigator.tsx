@@ -19,7 +19,8 @@ import {
   CatalogScreen,
   AddonsScreen,
   SearchScreen,
-  ShowRatingsScreen
+  ShowRatingsScreen,
+  CatalogSettingsScreen
 } from '../screens';
 
 // Stack navigator types
@@ -31,6 +32,7 @@ export type RootStackParamList = {
   Addons: undefined;
   Search: undefined;
   ShowRatings: { showId: number };
+  CatalogSettings: undefined;
 };
 
 // Tab navigator types
@@ -349,6 +351,7 @@ const AppNavigator = () => {
           <Stack.Screen name="Catalog" component={CatalogScreen} />
           <Stack.Screen name="Addons" component={AddonsScreen} />
           <Stack.Screen name="Search" component={SearchScreen} />
+          <Stack.Screen name="CatalogSettings" component={CatalogSettingsScreen} />
           <Stack.Screen 
             name="ShowRatings" 
             component={ShowRatingsScreen}

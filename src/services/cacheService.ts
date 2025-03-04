@@ -14,10 +14,12 @@ interface CachedContent {
 
 class CacheService {
   private static instance: CacheService;
-  private cache: Map<string, CachedContent>;
+  private cache: Map<string, CachedContent> = new Map();
+  private metadataScreenCache: Map<string, any> = new Map();
+  private readonly MAX_METADATA_SCREENS = 5;
 
   private constructor() {
-    this.cache = new Map();
+    // Initialize any other necessary properties
   }
 
   public static getInstance(): CacheService {
@@ -124,6 +126,35 @@ class CacheService {
   public isCached(id: string, type: string): boolean {
     const key = this.getCacheKey(id, type);
     return this.cache.has(key);
+  }
+
+  public cacheMetadataScreen(id: string, type: string, data: any) {
+    const key = `${type}:${id}`;
+    
+    // If this item is already in cache, just update it
+    if (this.metadataScreenCache.has(key)) {
+      this.metadataScreenCache.delete(key);
+      this.metadataScreenCache.set(key, data);
+      return;
+    }
+
+    // If we've reached the limit, remove the oldest item
+    if (this.metadataScreenCache.size >= this.MAX_METADATA_SCREENS) {
+      const firstKey = this.metadataScreenCache.keys().next().value;
+      this.metadataScreenCache.delete(firstKey);
+    }
+
+    // Add the new item
+    this.metadataScreenCache.set(key, data);
+  }
+
+  public getMetadataScreen(id: string, type: string) {
+    const key = `${type}:${id}`;
+    return this.metadataScreenCache.get(key);
+  }
+
+  public clearMetadataScreenCache() {
+    this.metadataScreenCache.clear();
   }
 }
 

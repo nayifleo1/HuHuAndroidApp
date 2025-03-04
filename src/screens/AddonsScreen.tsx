@@ -32,7 +32,7 @@ const AddonsScreen = () => {
   const loadAddons = async () => {
     try {
       setLoading(true);
-      const installedAddons = stremioService.getInstalledAddons();
+      const installedAddons = await stremioService.getInstalledAddonsAsync();
       setAddons(installedAddons);
     } catch (error) {
       console.error('Failed to load addons:', error);

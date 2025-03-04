@@ -22,6 +22,8 @@ export type RootStackParamList = {
   };
   Addons: undefined;
   Search: undefined;
+  CatalogSettings: undefined;
+  ShowRatings: { showId: number };
 };
 
 export type MainTabParamList = {
