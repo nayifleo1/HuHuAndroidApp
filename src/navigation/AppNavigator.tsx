@@ -1,13 +1,12 @@
 import React from 'react';
 import { NavigationContainer, DefaultTheme as NavigationDefaultTheme, DarkTheme as NavigationDarkTheme, Theme } from '@react-navigation/native';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createNativeStackNavigator, NativeStackNavigationOptions } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { useColorScheme, Platform } from 'react-native';
+import { useColorScheme, Platform, Animated, StatusBar } from 'react-native';
 import { PaperProvider, MD3DarkTheme, MD3LightTheme, adaptNavigationTheme } from 'react-native-paper';
 import type { MD3Theme } from 'react-native-paper';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { colors } from '../styles/colors';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 // Screens
 import {
@@ -19,7 +18,8 @@ import {
   PlayerScreen,
   CatalogScreen,
   AddonsScreen,
-  SearchScreen
+  SearchScreen,
+  ShowRatingsScreen
 } from '../screens';
 
 // Stack navigator types
@@ -30,6 +30,7 @@ export type RootStackParamList = {
   Catalog: { id: string; type: string; addonId: string };
   Addons: undefined;
   Search: undefined;
+  ShowRatings: { showId: number };
 };
 
 // Tab navigator types
@@ -326,49 +327,46 @@ const MainTabs = () => {
 
 // Stack Navigator
 const AppNavigator = () => {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
+  const isDarkMode = useColorScheme() === 'dark';
   
   return (
-    <PaperProvider theme={isDark ? CustomDarkTheme : CustomLightTheme}>
-      <NavigationContainer theme={isDark ? CustomNavigationDarkTheme : CustomNavigationLightTheme}>
-        <Stack.Navigator>
+    <NavigationContainer theme={isDarkMode ? CustomNavigationDarkTheme : CustomNavigationLightTheme}>
+      <StatusBar
+        translucent
+        backgroundColor="transparent"
+        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
+      />
+      <PaperProvider theme={isDarkMode ? CustomDarkTheme : CustomLightTheme}>
+        <Stack.Navigator
+          screenOptions={{
+            headerShown: false,
+            animation: Platform.OS === 'android' ? 'fade_from_bottom' : 'default',
+          }}
+        >
+          <Stack.Screen name="MainTabs" component={MainTabs} />
+          <Stack.Screen name="Metadata" component={MetadataScreen} />
+          <Stack.Screen name="Player" component={PlayerScreen} />
+          <Stack.Screen name="Catalog" component={CatalogScreen} />
+          <Stack.Screen name="Addons" component={AddonsScreen} />
+          <Stack.Screen name="Search" component={SearchScreen} />
           <Stack.Screen 
-            name="MainTabs" 
-            component={MainTabs} 
-            options={{ headerShown: false }}
-          />
-          <Stack.Screen 
-            name="Metadata" 
-            component={MetadataScreen} 
-            options={{ headerShown: false }}
-          />
-          <Stack.Screen 
-            name="Player" 
-            component={PlayerScreen} 
-            options={{ headerShown: false, fullScreenGestureEnabled: true }}
-          />
-          <Stack.Screen 
-            name="Catalog" 
-            component={CatalogScreen} 
-            options={({ route }) => ({ 
-              title: `${route.params.type} - ${route.params.id}`,
-              headerBackTitleVisible: false
-            })}
-          />
-          <Stack.Screen 
-            name="Addons" 
-            component={AddonsScreen} 
-            options={{ title: 'Addons' }}
-          />
-          <Stack.Screen 
-            name="Search" 
-            component={SearchScreen} 
-            options={{ title: 'Search' }}
+            name="ShowRatings" 
+            component={ShowRatingsScreen}
+            options={{
+              animation: 'slide_from_right',
+              animationDuration: 300,
+              presentation: 'card',
+              gestureEnabled: true,
+              gestureDirection: 'horizontal',
+              headerShown: false,
+              contentStyle: {
+                backgroundColor: 'transparent',
+              },
+            }}
           />
         </Stack.Navigator>
-      </NavigationContainer>
-    </PaperProvider>
+      </PaperProvider>
+    </NavigationContainer>
   );
 };
 

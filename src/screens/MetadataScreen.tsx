@@ -129,6 +129,7 @@ type RootStackParamList = {
       lang: string;
     }[];
   };
+  ShowRatings: { showId: number };
   // ... other screens
 };
 
@@ -1549,11 +1550,16 @@ const MetadataScreen = () => {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#000' : '#fff' }]}>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
+      <StatusBar
+        translucent
+        backgroundColor="transparent"
+        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
+      />
       <GestureHandlerRootView style={{ flex: 1 }}>
         <ScrollView
           ref={contentRef}
           style={styles.scrollView}
+          showsVerticalScrollIndicator={false}
           onScroll={(e) => {
             setLastScrollTop(e.nativeEvent.contentOffset.y);
           }}
@@ -1665,6 +1671,15 @@ const MetadataScreen = () => {
                       {inLibrary ? 'Saved' : 'Save'}
                     </Text>
                   </TouchableOpacity>
+
+                  {type === 'series' && tmdbId && (
+                    <TouchableOpacity
+                      style={[styles.iconButton]}
+                      onPress={() => navigation.navigate('ShowRatings', { showId: tmdbId })}
+                    >
+                      <MaterialIcons name="analytics" size={24} color="#fff" />
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             </LinearGradient>
@@ -1966,6 +1981,7 @@ const styles = StyleSheet.create({
   actionButtons: {
     flexDirection: 'row',
     gap: 12,
+    alignItems: 'center',
   },
   actionButton: {
     flex: 1,
@@ -1974,6 +1990,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 12,
     borderRadius: 100,
+  },
+  iconButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 2,
+    borderColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   playButton: {
     backgroundColor: '#fff',
@@ -2695,6 +2721,23 @@ const styles = StyleSheet.create({
     height: 20,
     borderRadius: 4,
     marginRight: 8,
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 16,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  headerButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerButtonText: {
+    color: colors.white,
+    fontSize: 12,
+    marginTop: 4,
   },
 });
 

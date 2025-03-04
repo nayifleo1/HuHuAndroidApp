@@ -16,19 +16,19 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { colors } from '../styles';
 import { catalogService, StreamingContent } from '../services/catalogService';
 import FastImage from '@d11/react-native-fast-image';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeOut, SlideInRight, Layout } from 'react-native-reanimated';
+import LinearGradient from 'react-native-linear-gradient';
 
 interface Category {
   id: string;
   name: string;
   type: 'movie' | 'series' | 'channel' | 'tv';
+  icon: string;
 }
 
 const CATEGORIES: Category[] = [
-  { id: 'movie', name: 'Movies', type: 'movie' },
-  { id: 'series', name: 'TV Shows', type: 'series' },
-  { id: 'channel', name: 'Channels', type: 'channel' },
-  { id: 'tv', name: 'Live TV', type: 'tv' },
+  { id: 'movie', name: 'Movies', type: 'movie', icon: 'movie' },
+  { id: 'series', name: 'TV Shows', type: 'series', icon: 'tv' }
 ];
 
 const DiscoverScreen = () => {
@@ -53,13 +53,16 @@ const DiscoverScreen = () => {
       setContent(allContent);
     } catch (error) {
       console.error('Failed to load content:', error);
+      setContent([]);
     } finally {
       setLoading(false);
     }
   };
 
   const handleCategoryPress = (category: Category) => {
-    setSelectedCategory(category);
+    if (category.id !== selectedCategory.id) {
+      setSelectedCategory(category);
+    }
   };
 
   const handleSearchPress = () => {
@@ -76,15 +79,17 @@ const DiscoverScreen = () => {
           isSelected && { 
             backgroundColor: colors.primary,
             borderColor: colors.primary,
-            shadowColor: colors.primary,
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.3,
-            shadowRadius: 3,
-            elevation: 3,
+            transform: [{ scale: 1.05 }],
           }
         ]}
         onPress={() => handleCategoryPress(item)}
       >
+        <MaterialIcons 
+          name={item.icon} 
+          size={24} 
+          color={isSelected ? colors.white : colors.mediumGray} 
+          style={styles.categoryIcon}
+        />
         <Text
           style={[
             styles.categoryText,
@@ -97,12 +102,11 @@ const DiscoverScreen = () => {
     );
   };
 
-  const renderContentItem = ({ item }: { item: StreamingContent }) => {
+  const renderContentItem = ({ item, index }: { item: StreamingContent; index: number }) => {
     return (
       <TouchableOpacity
         style={styles.contentItem}
         onPress={() => {
-          // @ts-ignore - We'll fix navigation types later
           navigation.navigate('Metadata', { id: item.id, type: item.type });
         }}
       >
@@ -112,40 +116,21 @@ const DiscoverScreen = () => {
             style={styles.poster}
             resizeMode={FastImage.resizeMode.cover}
           />
+          <LinearGradient
+            colors={['transparent', 'rgba(0,0,0,0.8)']}
+            style={styles.posterGradient}
+          >
+            <Text style={styles.contentTitle} numberOfLines={2}>
+              {item.name}
+            </Text>
+            {item.year && (
+              <Text style={styles.contentYear}>{item.year}</Text>
+            )}
+          </LinearGradient>
         </View>
-        <Text 
-          style={[styles.contentTitle, { color: isDarkMode ? colors.white : colors.black }]}
-          numberOfLines={1}
-        >
-          {item.name}
-        </Text>
-        {item.year && (
-          <Text style={styles.contentYear}>{item.year}</Text>
-        )}
       </TouchableOpacity>
     );
   };
-
-  if (loading) {
-    return (
-      <SafeAreaView style={[
-        styles.container,
-        { backgroundColor: isDarkMode ? colors.darkBackground : colors.lightBackground }
-      ]}>
-        <StatusBar
-          barStyle={isDarkMode ? 'light-content' : 'dark-content'}
-          backgroundColor={isDarkMode ? colors.darkBackground : colors.lightBackground}
-        />
-        <Animated.View 
-          entering={FadeIn.duration(300)}
-          exiting={FadeOut.duration(300)}
-          style={styles.loadingContainer}
-        >
-          <ActivityIndicator size="large" color={colors.primary} />
-        </Animated.View>
-      </SafeAreaView>
-    );
-  }
 
   return (
     <SafeAreaView style={[
@@ -157,51 +142,65 @@ const DiscoverScreen = () => {
         backgroundColor={isDarkMode ? colors.darkBackground : colors.lightBackground}
       />
       
-      <Animated.View 
-        entering={FadeIn.duration(300)}
-        exiting={FadeOut.duration(300)}
-        style={{ flex: 1 }}
-      >
+      <View style={{ flex: 1 }}>
         <View style={styles.header}>
           <View style={styles.headerContent}>
             <Text style={[styles.headerTitle, { color: isDarkMode ? colors.white : colors.black }]}>
               Discover
             </Text>
-            <TouchableOpacity onPress={handleSearchPress} style={styles.searchButton}>
-              <View style={styles.searchIconContainer}>
-                <MaterialIcons name="search" size={24} color={isDarkMode ? colors.white : colors.black} />
+            <TouchableOpacity 
+              onPress={handleSearchPress} 
+              style={styles.searchButton}
+            >
+              <View style={[
+                styles.searchIconContainer,
+                { backgroundColor: isDarkMode ? colors.transparentLight : 'rgba(0,0,0,0.05)' }
+              ]}>
+                <MaterialIcons 
+                  name="search" 
+                  size={24} 
+                  color={isDarkMode ? colors.white : colors.black} 
+                />
               </View>
             </TouchableOpacity>
           </View>
         </View>
         
         <View style={styles.categoryContainer}>
-          <FlatList
-            horizontal
-            data={CATEGORIES}
-            renderItem={renderCategory}
-            keyExtractor={item => item.id}
-            style={styles.categoriesList}
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.categoriesContent}
-          />
+          <View style={styles.categoriesContent}>
+            {CATEGORIES.map((category) => (
+              <View key={category.id}>
+                {renderCategory({ item: category })}
+              </View>
+            ))}
+          </View>
         </View>
         
-        <FlatList
-          data={content}
-          renderItem={renderContentItem}
-          keyExtractor={item => item.id}
-          numColumns={3}
-          contentContainerStyle={styles.contentList}
-          showsVerticalScrollIndicator={false}
-        />
-      </Animated.View>
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={colors.primary} />
+          </View>
+        ) : (
+          <FlatList
+            data={content}
+            renderItem={renderContentItem}
+            keyExtractor={item => item.id}
+            numColumns={2}
+            contentContainerStyle={styles.contentList}
+            showsVerticalScrollIndicator={false}
+            columnWrapperStyle={styles.contentRow}
+            initialNumToRender={6}
+            maxToRenderPerBatch={8}
+            windowSize={5}
+          />
+        )}
+      </View>
     </SafeAreaView>
   );
 };
 
 const { width } = Dimensions.get('window');
-const itemWidth = (width - 48) / 3; // 48 = padding and margins
+const itemWidth = (width - 40) / 2;
 
 const styles = StyleSheet.create({
   container: {
@@ -211,7 +210,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.05)',
+    borderBottomColor: 'rgba(255,255,255,0.1)',
   },
   headerContent: {
     flexDirection: 'row',
@@ -219,45 +218,50 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
+    fontSize: 32,
+    fontWeight: '800',
     letterSpacing: 0.5,
   },
   searchButton: {
     padding: 8,
   },
   searchIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.05)',
   },
   categoryContainer: {
-    paddingVertical: 12,
+    paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.05)',
-  },
-  categoriesList: {
-    maxHeight: 50,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
   },
   categoriesContent: {
+    flexDirection: 'row',
+    justifyContent: 'center',
     paddingHorizontal: 12,
+    gap: 12,
   },
   categoryButton: {
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    marginHorizontal: 6,
-    borderRadius: 24,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginHorizontal: 4,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.lightGray,
     backgroundColor: 'transparent',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  categoryIcon: {
+    marginRight: 4,
   },
   categoryText: {
     color: colors.mediumGray,
     fontWeight: '500',
-    fontSize: 14,
+    fontSize: 15,
   },
   loadingContainer: {
     flex: 1,
@@ -267,34 +271,51 @@ const styles = StyleSheet.create({
   contentList: {
     padding: 12,
   },
+  contentRow: {
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+  },
   contentItem: {
     width: itemWidth,
-    margin: 6,
+    marginVertical: 8,
   },
   posterContainer: {
-    borderRadius: 12,
+    borderRadius: 16,
     overflow: 'hidden',
-    shadowColor: '#000',
+    backgroundColor: colors.transparentLight,
+    elevation: 4,
+    shadowColor: colors.black,
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.25,
     shadowRadius: 4,
-    elevation: 3,
-    backgroundColor: colors.white,
-    marginBottom: 8,
   },
   poster: {
     aspectRatio: 2/3,
     width: '100%',
   },
+  posterGradient: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 12,
+    justifyContent: 'flex-end',
+  },
   contentTitle: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
-    marginTop: 4,
-    marginBottom: 2,
+    color: colors.white,
+    marginBottom: 4,
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   contentYear: {
-    fontSize: 11,
-    color: colors.mediumGray,
+    fontSize: 12,
+    color: colors.textDark,
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
 });
 
