@@ -192,17 +192,21 @@ class ExoPlayerActivity : AppCompatActivity() {
     private fun initializePlayer(videoUrl: String) {
         // Create a track selector with default parameters
         trackSelector = DefaultTrackSelector(this).apply {
-            // Ensure tracks are not disabled by default
+            // Ensure tracks are not disabled by default and set up subtitle preferences
             setParameters(buildUponParameters()
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                 .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
                 .setPreferredTextLanguage(subtitleLanguage ?: "en")
+                .setSelectUndeterminedTextLanguage(true)  // Select text track even if language is undetermined
+                .setDisabledTextTrackSelectionFlags(0)  // Don't disable any text tracks
+                .setForceHighestSupportedBitrate(true)  // Use highest quality available
                 .build())
         }
         
         // Log track selector parameters
         Log.d(TAG, "Track selector initialized with parameters: ${trackSelector.parameters}")
         
+        // Create the player with the track selector
         player = ExoPlayer.Builder(this)
             .setTrackSelector(trackSelector)
             .build()
@@ -240,11 +244,12 @@ class ExoPlayerActivity : AppCompatActivity() {
                             .setMimeType(MimeTypes.APPLICATION_SUBRIP)
                             .setLanguage(language)
                             .setLabel(getLanguageDisplayName(language))
-                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_AUTOSELECT)  // Make it default and auto-select
                             .build()
                         
                         mediaItemBuilder.setSubtitleConfigurations(listOf(subtitleConfig))
                         hasExternalSubtitles = true
+                        subtitlesEverDetected = true  // Consider external subtitles as detected
                         
                         Log.d(TAG, "External subtitle added successfully")
                     } catch (e: Exception) {
@@ -285,6 +290,9 @@ class ExoPlayerActivity : AppCompatActivity() {
                         
                         // Update subtitle button visibility based on available subtitle tracks
                         updateSubtitleButtonState(tracks)
+                        
+                        // Verify subtitle track selection
+                        verifySubtitleTrackSelection(tracks)
                         
                         // Force redraw of the subtitle button to update its appearance
                         subtitleButton?.invalidate()
@@ -516,13 +524,47 @@ class ExoPlayerActivity : AppCompatActivity() {
                         Log.d(TAG, "Subtitles disabled by user")
                         Toast.makeText(this, "Subtitles disabled", Toast.LENGTH_SHORT).show()
                     } else {
-                        // Enable subtitles
-                        val newParameters = trackSelector.buildUponParameters()
-                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                            .build()
-                        trackSelector.parameters = newParameters
-                        Log.d(TAG, "Subtitles enabled: ${subtitleOptions[which]}")
-                        Toast.makeText(this, "Subtitles enabled: ${subtitleOptions[which]}", Toast.LENGTH_SHORT).show()
+                        // Enable subtitles and select the specific track
+                        try {
+                            val trackIndex = which - 1 // Subtract 1 because first option is "Off"
+                            if (trackIndex < subtitleTracks.size) {
+                                // It's an in-stream subtitle track
+                                val (groupIndex, trackIdx) = subtitleTracks[trackIndex]
+                                val group = tracks.groups[groupIndex]
+                                val format = group.getTrackFormat(trackIdx)
+                                
+                                val newParameters = trackSelector.buildUponParameters()
+                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                    .setPreferredTextLanguage(format.language)
+                                    .build()
+                                trackSelector.parameters = newParameters
+                                
+                                Log.d(TAG, "Selected in-stream subtitle track: ${format.language}")
+                            } else if (hasExternalSubtitles) {
+                                // It's the external subtitle track
+                                val newParameters = trackSelector.buildUponParameters()
+                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                    .setPreferredTextLanguage(subtitleLanguage ?: "en")
+                                    .build()
+                                trackSelector.parameters = newParameters
+                                
+                                Log.d(TAG, "Selected external subtitle track")
+                            }
+                            
+                            // Force a tracks refresh by recreating the player
+                            player?.let { currentPlayer ->
+                                val position = currentPlayer.currentPosition
+                                val mediaItem = currentPlayer.currentMediaItem
+                                currentPlayer.release()
+                                initializePlayer(mediaItem?.localConfiguration?.uri.toString())
+                                player?.seekTo(position)
+                            }
+                            
+                            Toast.makeText(this, "Subtitles enabled: ${subtitleOptions[which]}", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error selecting subtitle track: ${e.message}")
+                            Toast.makeText(this, "Failed to select subtitle track", Toast.LENGTH_SHORT).show()
+                        }
                     }
                     dialog.dismiss()
                 }
@@ -707,5 +749,35 @@ class ExoPlayerActivity : AppCompatActivity() {
         playerView.showController()
         playerView.controllerHideOnTouch = false
         playerView.controllerShowTimeoutMs = 0
+    }
+
+    private fun verifySubtitleTrackSelection(tracks: Tracks) {
+        // If subtitles are enabled but no text track is selected, try to force selection
+        val hasEnabledTextTrack = tracks.groups.any { group ->
+            group.type == C.TRACK_TYPE_TEXT && group.isSelected
+        }
+        
+        if (!hasEnabledTextTrack && (subtitlesEverDetected || hasExternalSubtitles)) {
+            Log.d(TAG, "No text track selected, attempting to force selection")
+            
+            // Find the first available text track
+            tracks.groups.forEachIndexed { groupIndex, group ->
+                if (group.type == C.TRACK_TYPE_TEXT && group.length > 0) {
+                    try {
+                        val format = group.getTrackFormat(0)
+                        val newParameters = trackSelector.buildUponParameters()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            .setPreferredTextLanguage(format.language)
+                            .build()
+                        trackSelector.parameters = newParameters
+                        
+                        Log.d(TAG, "Forced selection of text track: ${format.language}")
+                        return
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error forcing text track selection: ${e.message}")
+                    }
+                }
+            }
+        }
     }
 } 

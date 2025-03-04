@@ -12,7 +12,9 @@ import {
   View,
   StyleSheet
 } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AppNavigator from './src/navigation/AppNavigator';
+import 'react-native-reanimated';
 
 function App(): React.JSX.Element {
   const isDarkMode = useColorScheme() === 'dark';
@@ -22,13 +24,15 @@ function App(): React.JSX.Element {
   };
 
   return (
-    <View style={[styles.container, backgroundStyle]}>
-      <StatusBar
-        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
-        backgroundColor={backgroundStyle.backgroundColor}
-      />
-      <AppNavigator />
-    </View>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <View style={[styles.container, backgroundStyle]}>
+        <StatusBar
+          barStyle={isDarkMode ? 'light-content' : 'dark-content'}
+          backgroundColor={backgroundStyle.backgroundColor}
+        />
+        <AppNavigator />
+      </View>
+    </GestureHandlerRootView>
   );
 }
 

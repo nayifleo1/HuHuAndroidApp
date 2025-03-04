@@ -27,6 +27,19 @@ import FastImage from '@d11/react-native-fast-image';
 import { colors } from '../styles/colors';
 import { useSettings } from '../hooks/useSettings';
 import { VideoPlayerService } from '../services/videoPlayerService';
+import Animated, {
+  useAnimatedStyle,
+  withTiming,
+  useSharedValue,
+  Easing,
+  runOnJS,
+  cancelAnimation
+} from 'react-native-reanimated';
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView
+} from 'react-native-gesture-handler';
 
 interface RouteParams {
   id: string;
@@ -162,6 +175,123 @@ const MetadataScreen = () => {
 
   const [selectedProvider, setSelectedProvider] = useState<string>('all');
   const [availableProviders, setAvailableProviders] = useState<Set<string>>(new Set());
+  // Add state for storing scroll position
+  const [savedScrollPosition, setSavedScrollPosition] = useState(0);
+
+  const [isClosing, setIsClosing] = useState(false);
+  // Change from position animation to opacity animation
+  const fadeAnimation = useSharedValue(0); // 0 = invisible, 1 = visible
+
+  // Unified timing config
+  const timingConfig = {
+    duration: 300,
+    easing: Easing.bezier(0.33, 1, 0.68, 1) // Custom easing for smooth motion
+  };
+
+  const restoreScrollPosition = useCallback(() => {
+    if (contentRef.current) {
+      contentRef.current.scrollTo({ y: savedScrollPosition, animated: false });
+    }
+  }, [savedScrollPosition]);
+
+  const closeWithAnimation = useCallback(() => {
+    'worklet';
+    setIsClosing(true);
+    fadeAnimation.value = withTiming(
+      0, // Fade to invisible
+      {
+        ...timingConfig,
+        duration: 250 // Slightly faster for closing
+      },
+      (finished) => {
+        if (finished) {
+          runOnJS(setShowStreamsPage)(false);
+          runOnJS(setIsClosing)(false);
+          runOnJS(setError)(null);
+          runOnJS(setSelectedProvider)('all');
+          runOnJS(setAvailableProviders)(new Set());
+          
+          if (type === 'series') {
+            runOnJS(setSelectedEpisode)(null);
+            runOnJS(setEpisodeStreams)({});
+          }
+          
+          // Use runOnJS to restore scroll position
+          runOnJS(restoreScrollPosition)();
+        }
+      }
+    );
+  }, [type, restoreScrollPosition]);
+
+  const handleBackFromStreams = useCallback(() => {
+    if (!isClosing) {
+      closeWithAnimation();
+    }
+  }, [closeWithAnimation, isClosing]);
+
+  // Update pan gesture to handle opacity change based on horizontal swipe
+  const panGesture = Gesture.Pan()
+    .onBegin(() => {
+      'worklet';
+      cancelAnimation(fadeAnimation);
+    })
+    .onUpdate((event) => {
+      'worklet';
+      if (!isClosing) {
+        // Map the horizontal swipe to opacity (0.0-1.0)
+        // The further right you swipe, the more transparent it becomes
+        const newOpacity = Math.max(0, Math.min(1, 1 - (event.translationX / (width * 0.7))));
+        fadeAnimation.value = newOpacity;
+      }
+    })
+    .onEnd((event) => {
+      'worklet';
+      // Determine if we should dismiss based on velocity or distance
+      const shouldDismiss = event.translationX > width * 0.3 || 
+                          (event.translationX > 0 && event.velocityX > 500);
+      
+      if (shouldDismiss) {
+        runOnJS(handleBackFromStreams)();
+      } else {
+        // Restore to full opacity
+        fadeAnimation.value = withTiming(1, timingConfig);
+      }
+    });
+
+  // Update animation style to use opacity
+  const streamsAnimatedStyle = useAnimatedStyle(() => {
+    const scale = 0.95 + (fadeAnimation.value * 0.05); // Scale from 0.95 to 1.0
+    
+    return {
+      opacity: fadeAnimation.value,
+      transform: [
+        { scale }
+      ],
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: -100,
+      backgroundColor: '#000',
+      borderRadius: 0,
+      overflow: 'hidden',
+      shadowColor: "#000",
+      shadowOffset: {
+        width: 0,
+        height: 0
+      },
+      shadowOpacity: 0.3,
+      shadowRadius: 10,
+      elevation: 10,
+      zIndex: 1000
+    };
+  }, []);
+
+  const contentAnimatedStyle = useAnimatedStyle(() => {
+    return {
+      opacity: 1
+    };
+  });
 
   useEffect(() => {
     loadMetadata();
@@ -172,14 +302,7 @@ const MetadataScreen = () => {
     if (Platform.OS === 'android') {
       const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
         if (showStreamsPage) {
-          setShowStreamsPage(false);
-          setSelectedEpisode(null);
-          setEpisodeStreams({});
-          
-          // Restore scroll position after a short delay to allow the view to render
-          setTimeout(() => {
-            episodesScrollRef.current?.scrollTo({ y: lastEpisodesScrollPosition, animated: false });
-          }, 100);
+          handleBackFromStreams();
           return true; // Prevent default behavior
         }
         return false; // Let default behavior happen (go back)
@@ -187,7 +310,7 @@ const MetadataScreen = () => {
 
       return () => backHandler.remove();
     }
-  }, [showStreamsPage, lastEpisodesScrollPosition]);
+  }, [showStreamsPage, lastEpisodesScrollPosition, handleBackFromStreams]);
 
   const loadMetadata = async () => {
     try {
@@ -314,30 +437,46 @@ const MetadataScreen = () => {
     
     try {
       setLoadingStreams(true);
-      const streamResponses = await stremioService.getStreams(type, id);
       
-      // Group streams by addon
-      const grouped = streamResponses.reduce<GroupedStreams>((acc, response) => {
-        const addonId = response.addon;
-        if (addonId) {
-          if (!acc[addonId]) {
-            acc[addonId] = {
-              addonName: response.addonName,
-              streams: []
-            };
-          }
-          const streamsWithAddon = response.streams.map(stream => ({
-            ...stream,
-            name: stream.name || stream.title || 'Unnamed Stream',
-            addonId: response.addon,
-            addonName: response.addonName
-          }));
-          acc[addonId].streams.push(...streamsWithAddon);
-        }
-        return acc;
-      }, {});
+      // Initialize empty grouped streams
+      setGroupedStreams({});
+      const providers = new Set<string>();
 
-      // Add external streaming sources
+      // Function to update streams for a single source
+      const updateStreamsForSource = (sourceId: string, sourceName: string, newStreams: Stream[]) => {
+        if (newStreams.length > 0) {
+          setGroupedStreams(prev => ({
+            ...prev,
+            [sourceId]: {
+              addonName: sourceName,
+              streams: newStreams
+            }
+          }));
+          providers.add(sourceId);
+          setAvailableProviders(new Set(providers));
+        }
+      };
+
+      // Start fetching Stremio streams
+      stremioService.getStreams(type, id).then(streamResponses => {
+        // Group streams by addon
+        streamResponses.forEach(response => {
+          const addonId = response.addon;
+          if (addonId) {
+            const streamsWithAddon = response.streams.map(stream => ({
+              ...stream,
+              name: stream.name || stream.title || 'Unnamed Stream',
+              addonId: response.addon,
+              addonName: response.addonName
+            }));
+            updateStreamsForSource(addonId, response.addonName, streamsWithAddon);
+          }
+        });
+      }).catch(error => {
+        console.error('Failed to load Stremio streams:', error);
+      });
+
+      // Function to fetch external streams
       const fetchExternalStreams = async (url: string, sourceName: string) => {
         try {
           const response = await fetch(url);
@@ -346,7 +485,7 @@ const MetadataScreen = () => {
           if (data.sources && data.sources.length > 0) {
             const source = data.sources[0];
             const streams: Stream[] = source.files.map((file: any) => ({
-              name: `${file.quality}`,  // Just use quality as the name
+              name: `${file.quality}`,
               title: `${sourceName} - ${file.quality}`,
               url: file.file,
               quality: file.quality,
@@ -354,7 +493,7 @@ const MetadataScreen = () => {
               lang: file.lang,
               headers: source.headers,
               addonId: 'external_sources',
-              addonName: sourceName  // Use source name directly
+              addonName: sourceName
             }));
             
             // Add subtitles if available
@@ -372,36 +511,21 @@ const MetadataScreen = () => {
         return [];
       };
 
-      // Fetch streams from both sources
-      const [source1Streams, source2Streams] = await Promise.all([
-        fetchExternalStreams(`https://nice-month-production.up.railway.app/embedsu/${id}`, 'Source 1'),
-        fetchExternalStreams(`https://vidsrc-api-js-phz6.onrender.com/embedsu/${id}`, 'Source 2')
-      ]);
+      // Fetch external sources independently
+      fetchExternalStreams(`https://nice-month-production.up.railway.app/embedsu/${id}`, 'Source 1')
+        .then(streams => {
+          if (streams.length > 0) {
+            updateStreamsForSource('source_1', 'Source 1', streams);
+          }
+        });
 
-      // Create separate groups for each source
-      if (source1Streams.length > 0) {
-        grouped['source_1'] = {
-          addonName: 'Source 1',
-          streams: source1Streams
-        };
-      }
-      
-      if (source2Streams.length > 0) {
-        grouped['source_2'] = {
-          addonName: 'Source 2',
-          streams: source2Streams
-        };
-      }
+      fetchExternalStreams(`https://vidsrc-api-js-phz6.onrender.com/embedsu/${id}`, 'Source 2')
+        .then(streams => {
+          if (streams.length > 0) {
+            updateStreamsForSource('source_2', 'Source 2', streams);
+          }
+        });
 
-      // Update available providers
-      const providers = new Set<string>();
-      
-      Object.entries(grouped).forEach(([addonId, { addonName, streams }]) => {
-        providers.add(addonId);
-      });
-
-      setAvailableProviders(providers);
-      setGroupedStreams(grouped);
     } catch (error) {
       console.error('Failed to load streams:', error);
     } finally {
@@ -414,28 +538,44 @@ const MetadataScreen = () => {
     
     try {
       setLoadingEpisodeStreams(true);
-      const streamResponses = await stremioService.getStreams('series', episodeId);
       
-      // Group streams by addon
-      const grouped = streamResponses.reduce<GroupedStreams>((acc, response) => {
-        const addonId = response.addon;
-        if (addonId) {
-          if (!acc[addonId]) {
-            acc[addonId] = {
-              addonName: response.addonName,
-              streams: []
-            };
-          }
-          const streamsWithAddon = response.streams.map(stream => ({
-            ...stream,
-            name: stream.name || stream.title || 'Unnamed Stream',
-            addonId: response.addon,
-            addonName: response.addonName
+      // Initialize empty episode streams
+      setEpisodeStreams({});
+      const providers = new Set<string>();
+
+      // Function to update streams for a single source
+      const updateStreamsForSource = (sourceId: string, sourceName: string, newStreams: Stream[]) => {
+        if (newStreams.length > 0) {
+          setEpisodeStreams(prev => ({
+            ...prev,
+            [sourceId]: {
+              addonName: sourceName,
+              streams: newStreams
+            }
           }));
-          acc[addonId].streams.push(...streamsWithAddon);
+          providers.add(sourceId);
+          setAvailableProviders(new Set(providers));
         }
-        return acc;
-      }, {});
+      };
+
+      // Start fetching Stremio streams
+      stremioService.getStreams('series', episodeId).then(streamResponses => {
+        // Group streams by addon
+        streamResponses.forEach(response => {
+          const addonId = response.addon;
+          if (addonId) {
+            const streamsWithAddon = response.streams.map(stream => ({
+              ...stream,
+              name: stream.name || stream.title || 'Unnamed Stream',
+              addonId: response.addon,
+              addonName: response.addonName
+            }));
+            updateStreamsForSource(addonId, response.addonName, streamsWithAddon);
+          }
+        });
+      }).catch(error => {
+        console.error('Failed to load Stremio streams:', error);
+      });
 
       // Add external streaming sources for episodes
       const episodeInfo = episodeId.split(':');
@@ -450,7 +590,7 @@ const MetadataScreen = () => {
           if (data.sources && data.sources.length > 0) {
             const source = data.sources[0];
             const streams: Stream[] = source.files.map((file: any) => ({
-              name: `${file.quality}`,  // Just use quality as the name
+              name: `${file.quality}`,
               title: `${sourceName} - ${file.quality}`,
               url: file.file,
               quality: file.quality,
@@ -458,7 +598,7 @@ const MetadataScreen = () => {
               lang: file.lang,
               headers: source.headers,
               addonId: 'external_sources',
-              addonName: sourceName  // Use source name directly
+              addonName: sourceName
             }));
             
             // Add subtitles if available
@@ -476,42 +616,25 @@ const MetadataScreen = () => {
         return [];
       };
 
-      // Fetch streams from both sources using the new URL format
-      const [source1Streams, source2Streams] = await Promise.all([
-        fetchExternalStreams(
-          `https://nice-month-production.up.railway.app/embedsu/${tmdbId}?s=${seasonNumber}&e=${episodeNumber}`,
-          'Source 1'
-        ),
-        fetchExternalStreams(
-          `https://vidsrc-api-js-phz6.onrender.com/embedsu/${tmdbId}?s=${seasonNumber}&e=${episodeNumber}`,
-          'Source 2'
-        )
-      ]);
-
-      // Create separate groups for each source
-      if (source1Streams.length > 0) {
-        grouped['source_1'] = {
-          addonName: 'Source 1',
-          streams: source1Streams
-        };
-      }
-      
-      if (source2Streams.length > 0) {
-        grouped['source_2'] = {
-          addonName: 'Source 2',
-          streams: source2Streams
-        };
-      }
-
-      // Update available providers
-      const providers = new Set<string>();
-      
-      Object.entries(grouped).forEach(([addonId, { addonName, streams }]) => {
-        providers.add(addonId);
+      // Fetch external sources independently
+      fetchExternalStreams(
+        `https://nice-month-production.up.railway.app/embedsu/${tmdbId}?s=${seasonNumber}&e=${episodeNumber}`,
+        'Source 1'
+      ).then(streams => {
+        if (streams.length > 0) {
+          updateStreamsForSource('source_1', 'Source 1', streams);
+        }
       });
 
-      setAvailableProviders(providers);
-      setEpisodeStreams(grouped);
+      fetchExternalStreams(
+        `https://vidsrc-api-js-phz6.onrender.com/embedsu/${tmdbId}?s=${seasonNumber}&e=${episodeNumber}`,
+        'Source 2'
+      ).then(streams => {
+        if (streams.length > 0) {
+          updateStreamsForSource('source_2', 'Source 2', streams);
+        }
+      });
+
     } catch (error) {
       console.error('Failed to load episode streams:', error);
     } finally {
@@ -519,18 +642,20 @@ const MetadataScreen = () => {
     }
   };
 
-  // Update handleEpisodeSelect to use stremioId
+  // Update handleEpisodeSelect to save scroll position
   const handleEpisodeSelect = (episode: Episode) => {
     const episodeId = episode.stremioId || `${id}:${episode.season_number}:${episode.episode_number}`;
     
+    // Save current scroll position before showing streams
+    if (contentRef.current) {
+      setSavedScrollPosition(lastScrollTop);
+    }
+    
     setSelectedEpisode(episodeId);
     setShowStreamsPage(true);
+    fadeAnimation.value = 0;
+    fadeAnimation.value = withTiming(1, timingConfig);
     loadEpisodeStreams(episodeId);
-
-    // Scroll to top when showing streams
-    if (contentRef.current) {
-      contentRef.current.scrollTo({ y: 0, animated: true });
-    }
   };
 
   // Memoize the episode rendering to avoid unnecessary re-renders
@@ -576,14 +701,17 @@ const MetadataScreen = () => {
         <View style={styles.episodeImageContainer}>
           {episodeImage ? (
             <>
+              <View style={[styles.episodeImage, styles.episodeImagePlaceholder]}>
+                <MaterialIcons name="movie" size={24} color="rgba(255,255,255,0.5)" />
+              </View>
               {isImageLoading && (
-                <View style={styles.episodeImageLoading}>
+                <View style={[styles.episodeImageLoading, { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }]}>
                   <ActivityIndicator size="small" color={colors.primary} />
                 </View>
               )}
               <FastImage 
                 source={{ uri: episodeImage }}
-                style={styles.episodeImage}
+                style={[styles.episodeImage, { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }]}
                 resizeMode={FastImage.resizeMode.cover}
                 onLoadStart={handleImageLoadStart}
                 onLoadEnd={handleImageLoadEnd}
@@ -1184,6 +1312,33 @@ const MetadataScreen = () => {
     );
   };
 
+  const renderStreamSkeleton = () => {
+    return (
+      <View style={styles.streamGroup}>
+        <View style={styles.skeletonTitle} />
+        {[1, 2, 3].map((_, index) => (
+          <View key={index} style={[
+            styles.streamCard,
+            styles.skeletonCard,
+            { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)' }
+          ]}>
+            <View style={styles.streamCardLeft}>
+              <View style={[styles.skeletonIcon, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]} />
+              <View style={styles.streamContent}>
+                <View style={[styles.skeletonText, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)', width: '80%' }]} />
+                <View style={styles.primaryTags}>
+                  <View style={[styles.skeletonTag, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]} />
+                  <View style={[styles.skeletonTag, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]} />
+                </View>
+                <View style={[styles.skeletonText, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)', width: '60%' }]} />
+              </View>
+            </View>
+          </View>
+        ))}
+      </View>
+    );
+  };
+
   const renderFilteredStreams = (streams: GroupedStreams) => {
     const filteredEntries = Object.entries(streams).filter(([addonId]) => 
       selectedProvider === 'all' || selectedProvider === addonId
@@ -1204,6 +1359,26 @@ const MetadataScreen = () => {
       );
     }).filter(Boolean);
   };
+
+  // Update handleShowStreams to save scroll position
+  const handleShowStreams = useCallback(() => {
+    // Save current scroll position before showing streams
+    if (contentRef.current) {
+      setSavedScrollPosition(lastScrollTop);
+    }
+    
+    setShowStreamsPage(true);
+    fadeAnimation.value = 0;
+    fadeAnimation.value = withTiming(1, timingConfig);
+    
+    setSelectedProvider('all');
+    setAvailableProviders(new Set());
+    setError(null);
+    
+    if (type === 'movie') {
+      loadStreams();
+    }
+  }, [type, lastScrollTop]);
 
   if (loading) {
     return (
@@ -1244,59 +1419,8 @@ const MetadataScreen = () => {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#000' : '#fff' }]}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
-      
-      {showStreamsPage ? (
-        <View style={styles.fullScreenContainer}>
-          <TouchableOpacity 
-            style={styles.streamsBackButton}
-            onPress={() => {
-              setShowStreamsPage(false);
-              setSelectedEpisode(null);
-              setEpisodeStreams({});
-              setSelectedProvider('all');
-            }}
-          >
-            <MaterialIcons name="arrow-back" size={24} color="#fff" />
-            <Text style={styles.streamsBackText}>
-              {type === 'series' ? 'Back to Episodes' : 'Back to Info'}
-            </Text>
-          </TouchableOpacity>
-
-          {type === 'series' ? renderStreamsHero() : null}
-          
-          <View style={styles.streamsMainContent}>
-            {/* Only show cast section for movies */}
-            {type === 'movie' && (
-              <View style={styles.movieCastSection}>
-                {renderCastSection()}
-              </View>
-            )}
-            
-            {loadingEpisodeStreams || loadingStreams ? (
-              <View style={styles.loadingStreams}>
-                <ActivityIndicator size="large" color={colors.primary} />
-                <Text style={styles.loadingText}>Loading streams...</Text>
-              </View>
-            ) : Object.keys(type === 'series' ? episodeStreams : groupedStreams).length === 0 ? (
-              <View style={styles.noStreams}>
-                <Text style={styles.noStreamsText}>No streams available</Text>
-                <TouchableOpacity 
-                  style={styles.retryButton}
-                  onPress={() => type === 'series' ? loadEpisodeStreams(selectedEpisode!) : loadStreams()}
-                >
-                  <Text style={styles.retryButtonText}>Retry</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <ScrollView style={styles.streamsContent}>
-                {renderStreamFilters()}
-                {renderFilteredStreams(type === 'series' ? episodeStreams : groupedStreams)}
-              </ScrollView>
-            )}
-          </View>
-        </View>
-      ) : (
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
+      <GestureHandlerRootView style={{ flex: 1 }}>
         <ScrollView
           ref={contentRef}
           style={styles.scrollView}
@@ -1388,12 +1512,7 @@ const MetadataScreen = () => {
                 <View style={styles.actionButtons}>
                   <TouchableOpacity
                     style={[styles.actionButton, styles.playButton]}
-                    onPress={() => {
-                      setShowStreamsPage(true);
-                      if (type === 'movie') {
-                        loadStreams();
-                      }
-                    }}
+                    onPress={handleShowStreams}
                   >
                     <MaterialIcons name="play-arrow" size={24} color="#000" />
                     <Text style={styles.playButtonText}>Play</Text>
@@ -1465,12 +1584,16 @@ const MetadataScreen = () => {
                 {renderCastSection()}
               </View>
               
-              {loadingStreams ? (
-                <View style={styles.loadingContainer}>
-                  <ActivityIndicator size="large" color={colors.primary} />
-                  <Text style={styles.loadingText}>Loading streams...</Text>
-                </View>
-              ) : Object.keys(groupedStreams).length === 0 ? (
+              {(loadingStreams || Object.keys(groupedStreams).length === 0) && !error ? (
+                <ScrollView>
+                  {renderStreamFilters()}
+                  {[1, 2].map((_, index) => (
+                    <View key={index}>
+                      {renderStreamSkeleton()}
+                    </View>
+                  ))}
+                </ScrollView>
+              ) : error ? (
                 <View style={styles.noStreams}>
                   <Text style={styles.noStreamsText}>No streams available</Text>
                   <TouchableOpacity 
@@ -1502,19 +1625,72 @@ const MetadataScreen = () => {
             </View>
           )}
         </ScrollView>
-      )}
 
-      {/* Back Button - only show in main view */}
-      {!showStreamsPage && lastScrollTop < 50 && (
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <MaterialIcons name="arrow-back" size={24} color="#fff" />
-        </TouchableOpacity>
-      )}
+        {showStreamsPage && (
+          <GestureDetector gesture={panGesture}>
+            <Animated.View style={streamsAnimatedStyle}>
+              <TouchableOpacity 
+                style={styles.streamsBackButton}
+                onPress={handleBackFromStreams}
+              >
+                <MaterialIcons name="arrow-back" size={24} color="#fff" />
+                <Text style={styles.streamsBackText}>
+                  {type === 'series' ? 'Back to Episodes' : 'Back to Info'}
+                </Text>
+              </TouchableOpacity>
+              
+              {type === 'series' ? renderStreamsHero() : null}
+              
+              <View style={styles.streamsMainContent}>
+                {/* Only show cast section for movies */}
+                {type === 'movie' && (
+                  <View style={styles.movieCastSection}>
+                    {renderCastSection()}
+                  </View>
+                )}
+                
+                {(loadingEpisodeStreams || loadingStreams || Object.keys(type === 'series' ? episodeStreams : groupedStreams).length === 0) && !error ? (
+                  <ScrollView style={styles.streamsContent}>
+                    {renderStreamFilters()}
+                    {[1, 2].map((_, index) => (
+                      <View key={index}>
+                        {renderStreamSkeleton()}
+                      </View>
+                    ))}
+                  </ScrollView>
+                ) : error ? (
+                  <View style={styles.noStreams}>
+                    <Text style={styles.noStreamsText}>No streams available</Text>
+                    <TouchableOpacity 
+                      style={styles.retryButton}
+                      onPress={() => type === 'series' ? loadEpisodeStreams(selectedEpisode!) : loadStreams()}
+                    >
+                      <Text style={styles.retryButtonText}>Retry</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <ScrollView style={styles.streamsContent}>
+                    {renderStreamFilters()}
+                    {renderFilteredStreams(type === 'series' ? episodeStreams : groupedStreams)}
+                  </ScrollView>
+                )}
+              </View>
+            </Animated.View>
+          </GestureDetector>
+        )}
 
-      {renderCastModal()}
+        {/* Back Button - only show in main view */}
+        {!showStreamsPage && lastScrollTop < 50 && (
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <MaterialIcons name="arrow-back" size={24} color="#fff" />
+          </TouchableOpacity>
+        )}
+
+        {renderCastModal()}
+      </GestureHandlerRootView>
     </SafeAreaView>
   );
 };
@@ -1810,7 +1986,7 @@ const styles = StyleSheet.create({
   },
   backButton: {
     position: 'absolute',
-    top: Platform.OS === 'android' ? 40 : 60,
+    top: Platform.OS === 'android' ? 35 : 45,
     left: 16,
     width: 40,
     height: 40,
@@ -1937,7 +2113,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    padding: 16,
+    padding: 14,
+    paddingTop: Platform.OS === 'android' ? 35 : 45,
     position: 'absolute',
     top: 0,
     left: 0,
@@ -1945,16 +2122,22 @@ const styles = StyleSheet.create({
   },
   streamsBackText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: '600',
   },
   fullScreenContainer: {
-    flex: 1,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: '#000',
+    zIndex: 1000,
   },
   streamsMainContent: {
     flex: 1,
     backgroundColor: '#000',
+    paddingTop: Platform.OS === 'android' ? 48 : 56,
   },
   castSection: {
     marginTop: 0,
@@ -2344,6 +2527,33 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginLeft: 6,
     fontWeight: '600',
+  },
+  skeletonCard: {
+    opacity: 0.7,
+  },
+  skeletonTitle: {
+    height: 24,
+    width: '40%',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 4,
+    marginBottom: 16,
+  },
+  skeletonIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    marginRight: 12,
+  },
+  skeletonText: {
+    height: 16,
+    borderRadius: 4,
+    marginBottom: 8,
+  },
+  skeletonTag: {
+    width: 60,
+    height: 20,
+    borderRadius: 4,
+    marginRight: 8,
   },
 });
 
