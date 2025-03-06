@@ -118,14 +118,19 @@ class StremioService {
   private readonly STORAGE_KEY = 'stremio-addons';
   private readonly DEFAULT_ADDONS = [
     'https://v3-cinemeta.strem.io/manifest.json',
-    
+    'https://torrentio.strem.fun/manifest.json',
+    'https://1337x-addon.up.railway.app/manifest.json',
+    'https://v3-community-movies.strem.io/manifest.json',
+    'https://v3-community-series.strem.io/manifest.json'
   ];
   private readonly MAX_CONCURRENT_REQUESTS = 3;
   private readonly DEFAULT_PAGE_SIZE = 50;
+  private initialized: boolean = false;
+  private initializationPromise: Promise<void> | null = null;
 
   private constructor() {
-    // Initialize addons synchronously
-    this.loadInstalledAddonsSync();
+    // Start initialization but don't wait for it
+    this.initializationPromise = this.initialize();
   }
 
   static getInstance(): StremioService {
@@ -135,18 +140,9 @@ class StremioService {
     return StremioService.instance;
   }
 
-  private async retryRequest<T>(request: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
-    try {
-      return await request();
-    } catch (error) {
-      if (retries === 0) throw error;
-      
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return this.retryRequest(request, retries - 1, delay * 2);
-    }
-  }
-
-  private async loadInstalledAddonsSync() {
+  private async initialize(): Promise<void> {
+    if (this.initialized) return;
+    
     try {
       const storedAddons = await AsyncStorage.getItem(this.STORAGE_KEY);
       
@@ -162,15 +158,49 @@ class StremioService {
         }
       }
       
-      // If no addons, install defaults immediately
+      // If no addons, install defaults
       if (this.installedAddons.size === 0) {
         await this.installDefaultAddons();
       }
+      
+      this.initialized = true;
     } catch (error) {
-      console.error('Failed to load addons:', error);
+      console.error('Failed to initialize addons:', error);
       // Install defaults as fallback
       await this.installDefaultAddons();
+      this.initialized = true;
     }
+  }
+
+  // Ensure service is initialized before any operation
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized && this.initializationPromise) {
+      await this.initializationPromise;
+    }
+  }
+
+  private async retryRequest<T>(request: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
+    let lastError: any;
+    for (let attempt = 0; attempt < retries + 1; attempt++) {
+      try {
+        return await request();
+      } catch (error: any) {
+        lastError = error;
+        console.warn(`Request failed (attempt ${attempt + 1}/${retries + 1}):`, {
+          message: error.message,
+          code: error.code,
+          isAxiosError: error.isAxiosError,
+          status: error.response?.status,
+        });
+        
+        if (attempt < retries) {
+          const backoffDelay = delay * Math.pow(2, attempt);
+          console.log(`Retrying in ${backoffDelay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, backoffDelay));
+        }
+      }
+    }
+    throw lastError;
   }
 
   private async installDefaultAddons(): Promise<void> {
@@ -246,6 +276,11 @@ class StremioService {
     return Array.from(this.installedAddons.values());
   }
 
+  async getInstalledAddonsAsync(): Promise<Manifest[]> {
+    await this.ensureInitialized();
+    return this.getInstalledAddons();
+  }
+
   private formatId(id: string): string {
     return id.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
   }
@@ -275,7 +310,15 @@ class StremioService {
 
   private getAddonBaseURL(url: string): string {
     // Remove trailing manifest.json if present
-    return url.replace(/manifest\.json$/, '').replace(/\/$/, '');
+    let baseUrl = url.replace(/manifest\.json$/, '').replace(/\/$/, '');
+    
+    // Ensure URL has protocol
+    if (!baseUrl.startsWith('http')) {
+      baseUrl = `https://${baseUrl}`;
+    }
+    
+    console.log('Addon base URL:', baseUrl);
+    return baseUrl;
   }
 
   async getCatalog(manifest: Manifest, type: string, id: string, page = 1, filters: CatalogFilter[] = []): Promise<Meta[]> {
@@ -405,84 +448,149 @@ class StremioService {
   }
 
   async getStreams(type: string, id: string, callback?: (streams: Stream[] | null, addonName: string | null, error: Error | null) => void): Promise<StreamResponse[]> {
+    await this.ensureInitialized();
+    
     const addons = this.getInstalledAddons();
+    console.log('Installed addons:', addons.map(a => ({ id: a.id, url: a.url })));
+    
     const streamResponses: StreamResponse[] = [];
     
-    // Find addons that provide streams
-    const streamAddons = addons.filter(addon => {
-      if (!addon.resources) return false;
-      
-      return addon.resources.some(
-        resource => resource.name === 'stream' && resource.types.includes(type)
-      );
-    });
+    // Find addons that provide streams and sort them by installation order
+    const streamAddons = addons
+      .filter(addon => {
+        if (!addon.resources) {
+          console.log(`Addon ${addon.id} has no resources`);
+          return false;
+        }
+        
+        const hasStreamResource = addon.resources.some(
+          resource => resource.name === 'stream' && resource.types.includes(type)
+        );
+        
+        if (!hasStreamResource) {
+          console.log(`Addon ${addon.id} does not support streaming ${type}`);
+        }
+        
+        return hasStreamResource;
+      });
     
-    let completedRequests = 0;
+    console.log('Stream capable addons:', streamAddons.map(a => a.id));
     
-    // Process addons in batches to avoid too many concurrent requests
-    for (let i = 0; i < streamAddons.length; i += this.MAX_CONCURRENT_REQUESTS) {
-      const batch = streamAddons.slice(i, i + this.MAX_CONCURRENT_REQUESTS);
-      
-      const promises = batch.map(async (addon) => {
+    if (streamAddons.length === 0) {
+      console.warn('No addons found that can provide streams');
+      return [];
+    }
+
+    // Create a map to store promises for each addon
+    const addonPromises = new Map<string, Promise<void>>();
+    
+    // Process each addon
+    for (const addon of streamAddons) {
+      const promise = (async () => {
         try {
-          const response = await this.fetchStreamsFromAddon(addon, type, id);
+          if (!addon.url) {
+            console.warn(`Addon ${addon.id} has no URL`);
+            return;
+          }
+
+          const baseUrl = this.getAddonBaseURL(addon.url);
+          const url = `${baseUrl}/stream/${type}/${id}.json`;
           
-          if (response) {
-            streamResponses.push(response);
-            
-            if (callback) {
-              callback(response.streams, response.addonName, null);
+          const response = await this.retryRequest(async () => {
+            return await axios.get(url);
+          });
+
+          if (response.data && response.data.streams) {
+            const processedStreams = this.processStreams(response.data.streams, addon);
+            if (processedStreams.length > 0) {
+              streamResponses.push({
+                addon: addon.id,
+                addonName: addon.name,
+                streams: processedStreams
+              });
             }
           }
-        } catch (error) {
-          console.error(`Failed to fetch streams from ${addon.name}:`, error);
-          
+
           if (callback) {
-            callback(null, addon.name, error instanceof Error ? error : new Error('Unknown error'));
+            callback(response.data?.streams || null, addon.name, null);
           }
-        } finally {
-          completedRequests++;
+        } catch (error) {
+          console.error(`Failed to get streams from ${addon.name}:`, error);
+          if (callback) {
+            callback(null, addon.name, error as Error);
+          }
         }
-      });
-      
-      await Promise.all(promises);
+      })();
+
+      addonPromises.set(addon.id, promise);
     }
-    
-    // Sort by debrid first, then by resolution
-    return streamResponses.sort((a, b) => {
-      // Sort by if any stream is debrid
-      const aHasDebrid = a.streams.some(s => s.isDebrid);
-      const bHasDebrid = b.streams.some(s => s.isDebrid);
-      
-      if (aHasDebrid && !bHasDebrid) return -1;
-      if (!aHasDebrid && bHasDebrid) return 1;
-      
-      return 0;
+
+    // Wait for all promises to complete
+    await Promise.all(addonPromises.values());
+
+    // Sort stream responses to maintain installed addon order
+    streamResponses.sort((a, b) => {
+      const indexA = streamAddons.findIndex(addon => addon.id === a.addon);
+      const indexB = streamAddons.findIndex(addon => addon.id === b.addon);
+      return indexA - indexB;
     });
+
+    return streamResponses;
   }
 
   private async fetchStreamsFromAddon(addon: Manifest, type: string, id: string): Promise<StreamResponse | null> {
-    if (!addon.url) return null;
+    if (!addon.url) {
+      console.warn(`Addon ${addon.id} has no URL defined`);
+      return null;
+    }
     
     const baseUrl = this.getAddonBaseURL(addon.url);
     const url = `${baseUrl}/stream/${type}/${id}.json`;
     
+    console.log(`Fetching streams from URL: ${url}`);
+    
     try {
+      // Increase timeout for debrid services
+      const timeout = addon.id.toLowerCase().includes('torrentio') ? 30000 : 10000;
+      
       const response = await this.retryRequest(async () => {
-        return await axios.get(url, { timeout: 10000 }); // 10 second timeout
-      });
+        console.log(`Making request to ${url} with timeout ${timeout}ms`);
+        return await axios.get(url, { 
+          timeout,
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+          }
+        });
+      }, 5); // Increase retries for stream fetching
       
       if (response.data && response.data.streams && Array.isArray(response.data.streams)) {
         const streams = this.processStreams(response.data.streams, addon);
+        console.log(`Successfully processed ${streams.length} streams from ${addon.id}`);
         
         return {
           streams,
           addon: addon.id,
           addonName: addon.name
         };
+      } else {
+        console.warn(`Invalid response format from ${addon.id}:`, response.data);
       }
-    } catch (error) {
-      console.error(`Failed to fetch streams from ${addon.name}:`, error);
+    } catch (error: any) {
+      const errorDetails = {
+        addonId: addon.id,
+        addonName: addon.name,
+        url,
+        message: error.message,
+        code: error.code,
+        isAxiosError: error.isAxiosError,
+        status: error.response?.status,
+        responseData: error.response?.data
+      };
+      console.error('Failed to fetch streams from addon:', errorDetails);
+      
+      // Re-throw the error with more context
+      throw new Error(`Failed to fetch streams from ${addon.name}: ${error.message}`);
     }
     
     return null;

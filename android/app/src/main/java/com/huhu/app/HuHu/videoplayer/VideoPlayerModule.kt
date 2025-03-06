@@ -1,4 +1,4 @@
-package com.stremiomobile.videoplayer
+package com.huhu.app.videoplayer
 
 import android.content.Intent
 import android.net.Uri

@@ -14,6 +14,8 @@ export interface TMDBEpisode {
   still_path: string | null;
   air_date: string;
   vote_average: number;
+  imdb_id?: string;
+  imdb_rating?: number;
   season_poster_path?: string | null;
 }
 
@@ -49,6 +51,7 @@ export interface TMDBShow {
 
 export class TMDBService {
   private static instance: TMDBService;
+  private static ratingCache: Map<string, number | null> = new Map();
 
   private constructor() {}
 
@@ -64,6 +67,10 @@ export class TMDBService {
       Authorization: `Bearer ${API_KEY}`,
       'Content-Type': 'application/json',
     };
+  }
+
+  private generateRatingCacheKey(showName: string, seasonNumber: number, episodeNumber: number): string {
+    return `${showName.toLowerCase()}_s${seasonNumber}_e${episodeNumber}`;
   }
 
   /**
@@ -106,9 +113,69 @@ export class TMDBService {
   }
 
   /**
-   * Get season details including all episodes
+   * Get external IDs for an episode (including IMDb ID)
    */
-  async getSeasonDetails(tmdbId: number, seasonNumber: number): Promise<TMDBSeason | null> {
+  async getEpisodeExternalIds(
+    tmdbId: number,
+    seasonNumber: number,
+    episodeNumber: number
+  ): Promise<{ imdb_id: string | null } | null> {
+    try {
+      const response = await axios.get(
+        `${BASE_URL}/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}/external_ids`,
+        {
+          headers: this.getHeaders(),
+        }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get episode external IDs:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get IMDb rating for an episode using OMDB API with caching
+   */
+  async getIMDbRating(showName: string, seasonNumber: number, episodeNumber: number): Promise<number | null> {
+    const cacheKey = this.generateRatingCacheKey(showName, seasonNumber, episodeNumber);
+    
+    // Check cache first
+    if (TMDBService.ratingCache.has(cacheKey)) {
+      return TMDBService.ratingCache.get(cacheKey) ?? null;
+    }
+
+    try {
+      const OMDB_API_KEY = '20e793df';
+      const response = await axios.get(`http://www.omdbapi.com/`, {
+        params: {
+          apikey: OMDB_API_KEY,
+          t: showName,
+          Season: seasonNumber,
+          Episode: episodeNumber
+        }
+      });
+      
+      let rating: number | null = null;
+      if (response.data && response.data.imdbRating && response.data.imdbRating !== 'N/A') {
+        rating = parseFloat(response.data.imdbRating);
+      }
+
+      // Store in cache
+      TMDBService.ratingCache.set(cacheKey, rating);
+      return rating;
+    } catch (error) {
+      console.error('Failed to get IMDb rating:', error);
+      // Cache the failed result too to prevent repeated failed requests
+      TMDBService.ratingCache.set(cacheKey, null);
+      return null;
+    }
+  }
+
+  /**
+   * Get season details including all episodes with IMDb ratings
+   */
+  async getSeasonDetails(tmdbId: number, seasonNumber: number, showName?: string): Promise<TMDBSeason | null> {
     try {
       const response = await axios.get(`${BASE_URL}/tv/${tmdbId}/season/${seasonNumber}`, {
         headers: this.getHeaders(),
@@ -116,7 +183,42 @@ export class TMDBService {
           language: 'en-US',
         },
       });
-      return response.data;
+
+      const season = response.data;
+
+      // If show name is provided, fetch IMDb ratings for each episode in batches
+      if (showName) {
+        // Process episodes in batches of 5 to avoid rate limiting
+        const batchSize = 5;
+        const episodes = [...season.episodes];
+        const episodesWithRatings = [];
+
+        for (let i = 0; i < episodes.length; i += batchSize) {
+          const batch = episodes.slice(i, i + batchSize);
+          const batchPromises = batch.map(async (episode: TMDBEpisode) => {
+            const imdbRating = await this.getIMDbRating(
+              showName,
+              episode.season_number,
+              episode.episode_number
+            );
+
+            return {
+              ...episode,
+              imdb_rating: imdbRating
+            };
+          });
+
+          const batchResults = await Promise.all(batchPromises);
+          episodesWithRatings.push(...batchResults);
+        }
+
+        return {
+          ...season,
+          episodes: episodesWithRatings,
+        };
+      }
+
+      return season;
     } catch (error) {
       console.error('Failed to get season details:', error);
       return null;
@@ -298,6 +400,24 @@ export class TMDBService {
       return response.data;
     } catch (error) {
       console.error('Failed to fetch person details:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get external IDs for a TV show (including IMDb ID)
+   */
+  async getShowExternalIds(tmdbId: number): Promise<{ imdb_id: string | null } | null> {
+    try {
+      const response = await axios.get(
+        `${BASE_URL}/tv/${tmdbId}/external_ids`,
+        {
+          headers: this.getHeaders(),
+        }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get show external IDs:', error);
       return null;
     }
   }

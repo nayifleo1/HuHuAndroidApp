@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   StatusBar,
   Keyboard,
   Dimensions,
+  SectionList,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -19,10 +20,15 @@ import { colors } from '../styles';
 import { catalogService, StreamingContent } from '../services/catalogService';
 import FastImage from '@d11/react-native-fast-image';
 import debounce from 'lodash/debounce';
+import Animated, { FadeIn, FadeOut, SlideInRight } from 'react-native-reanimated';
 
 const { width } = Dimensions.get('window');
+const POSTER_WIDTH = 90;
+const POSTER_HEIGHT = 135;
 
 const PLACEHOLDER_POSTER = 'https://placehold.co/300x450/222222/CCCCCC?text=No+Poster';
+
+type SearchFilter = 'all' | 'movie' | 'series';
 
 const SearchScreen = () => {
   const navigation = useNavigation();
@@ -31,6 +37,44 @@ const SearchScreen = () => {
   const [results, setResults] = useState<StreamingContent[]>([]);
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<SearchFilter>('all');
+
+  // Set navigation options to hide the header
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerShown: false,
+    });
+  }, [navigation]);
+
+  // Categorize results
+  const categorizedResults = useMemo(() => {
+    if (!results.length) return [];
+
+    const movieResults = results.filter(item => item.type === 'movie');
+    const seriesResults = results.filter(item => item.type === 'series');
+
+    const sections = [];
+    
+    if (activeFilter === 'all' || activeFilter === 'movie') {
+      if (movieResults.length > 0) {
+        sections.push({
+          title: 'Movies',
+          data: movieResults,
+        });
+      }
+    }
+    
+    if (activeFilter === 'all' || activeFilter === 'series') {
+      if (seriesResults.length > 0) {
+        sections.push({
+          title: 'TV Shows',
+          data: seriesResults,
+        });
+      }
+    }
+
+    return sections;
+  }, [results, activeFilter]);
 
   // Debounced search function
   const debouncedSearch = useCallback(
@@ -69,95 +113,140 @@ const SearchScreen = () => {
     setQuery('');
     setResults([]);
     setSearched(false);
+    setActiveFilter('all');
   };
 
-  const renderItem = ({ item }: { item: StreamingContent }) => {
+  const renderSearchFilters = () => {
+    const filters: { id: SearchFilter; label: string; icon: string }[] = [
+      { id: 'all', label: 'All', icon: 'apps' },
+      { id: 'movie', label: 'Movies', icon: 'movie' },
+      { id: 'series', label: 'TV Shows', icon: 'tv' },
+    ];
+
     return (
-      <TouchableOpacity
-        style={[
-          styles.resultItem,
-          { backgroundColor: isDarkMode ? colors.darkBackground : colors.white }
-        ]}
-        onPress={() => {
-          // @ts-ignore - We'll fix navigation types later
-          navigation.navigate('Metadata', { id: item.id, type: item.type });
-        }}
-      >
-        <View style={styles.posterContainer}>
-          <FastImage
-            source={{ uri: item.poster || PLACEHOLDER_POSTER }}
-            style={styles.poster}
-            resizeMode={FastImage.resizeMode.cover}
-          />
-        </View>
-        
-        <View style={styles.itemDetails}>
-          <Text 
-            style={[styles.itemTitle, { color: isDarkMode ? colors.white : colors.black }]}
-            numberOfLines={2}
+      <View style={styles.filtersContainer}>
+        {filters.map((filter) => (
+          <TouchableOpacity
+            key={filter.id}
+            style={[
+              styles.filterButton,
+              activeFilter === filter.id && styles.filterButtonActive,
+              { borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : colors.border }
+            ]}
+            onPress={() => setActiveFilter(filter.id)}
           >
-            {item.name}
-          </Text>
-          
-          <View style={styles.metaRow}>
-            {item.year && (
-              <Text style={[styles.yearText, { color: isDarkMode ? colors.lightGray : colors.mediumGray }]}>
-                {item.year}
-              </Text>
-            )}
-            <View style={[styles.typeBadge, { backgroundColor: colors.primary }]}>
-              <Text style={styles.typeText}>
-                {item.type.charAt(0).toUpperCase() + item.type.slice(1)}
-              </Text>
-            </View>
-          </View>
-        </View>
-      </TouchableOpacity>
+            <MaterialIcons
+              name={filter.icon}
+              size={20}
+              color={activeFilter === filter.id ? colors.primary : (isDarkMode ? colors.lightGray : colors.mediumGray)}
+              style={styles.filterIcon}
+            />
+            <Text
+              style={[
+                styles.filterText,
+                activeFilter === filter.id && styles.filterTextActive,
+                { color: isDarkMode ? colors.white : colors.black }
+              ]}
+            >
+              {filter.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
     );
   };
+
+  const renderItem = ({ item, index, section }: { item: StreamingContent; index: number; section: { title: string; data: StreamingContent[] } }) => {
+    return (
+      <Animated.View
+        entering={SlideInRight.delay(index * 50).springify()}
+      >
+        <TouchableOpacity
+          style={[
+            styles.resultItem,
+            { backgroundColor: isDarkMode ? colors.darkBackground : colors.white }
+          ]}
+          onPress={() => {
+            navigation.navigate('Metadata', { id: item.id, type: item.type });
+          }}
+        >
+          <View style={styles.posterContainer}>
+            <FastImage
+              source={{ uri: item.poster || PLACEHOLDER_POSTER }}
+              style={styles.poster}
+              resizeMode={FastImage.resizeMode.cover}
+            />
+          </View>
+          
+          <View style={styles.itemDetails}>
+            <Text 
+              style={[styles.itemTitle, { color: isDarkMode ? colors.white : colors.black }]}
+              numberOfLines={2}
+            >
+              {item.name}
+            </Text>
+            
+            <View style={styles.metaRow}>
+              {item.year && (
+                <Text style={[styles.yearText, { color: isDarkMode ? colors.lightGray : colors.mediumGray }]}>
+                  {item.year}
+                </Text>
+              )}
+              {item.genres && item.genres.length > 0 && (
+                <Text style={[styles.genreText, { color: isDarkMode ? colors.lightGray : colors.mediumGray }]}>
+                  {item.genres[0]}
+                </Text>
+              )}
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Animated.View>
+    );
+  };
+
+  const renderSectionHeader = ({ section: { title, data } }: { section: { title: string; data: StreamingContent[] } }) => (
+    <View style={[
+      styles.sectionHeader,
+      { backgroundColor: isDarkMode ? colors.darkBackground : colors.lightBackground }
+    ]}>
+      <Text style={[styles.sectionTitle, { color: isDarkMode ? colors.white : colors.black }]}>
+        {title} ({data.length})
+      </Text>
+    </View>
+  );
 
   return (
     <SafeAreaView style={[
       styles.container,
-      { backgroundColor: isDarkMode ? colors.darkBackground : colors.lightBackground }
+      { backgroundColor: colors.black }
     ]}>
       <StatusBar
-        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
-        backgroundColor={isDarkMode ? colors.darkBackground : colors.lightBackground}
+        barStyle="light-content"
+        backgroundColor={colors.black}
       />
       
       <View style={styles.header}>
-        <TouchableOpacity 
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <MaterialIcons 
-            name="arrow-back" 
-            size={24} 
-            color={isDarkMode ? colors.white : colors.black}
-          />
-        </TouchableOpacity>
-
+        <Text style={styles.headerTitle}>Search</Text>
         <View style={[
           styles.searchBar, 
           { 
-            backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : colors.white,
-            borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : colors.border,
+            backgroundColor: colors.darkGray,
+            borderColor: 'transparent',
           }
         ]}>
           <MaterialIcons 
             name="search" 
             size={24} 
-            color={isDarkMode ? colors.lightGray : colors.mediumGray}
+            color={colors.lightGray}
             style={styles.searchIcon}
           />
           <TextInput
             style={[
               styles.searchInput,
-              { color: isDarkMode ? colors.white : colors.black }
+              { color: colors.white }
             ]}
-            placeholder="Search movies, shows, channels..."
-            placeholderTextColor={isDarkMode ? colors.lightGray : colors.mediumGray}
+            placeholder="Search movies, shows..."
+            placeholderTextColor={colors.lightGray}
             value={query}
             onChangeText={setQuery}
             returnKeyType="search"
@@ -172,12 +261,14 @@ const SearchScreen = () => {
               <MaterialIcons 
                 name="close" 
                 size={20} 
-                color={isDarkMode ? colors.lightGray : colors.mediumGray}
+                color={colors.lightGray}
               />
             </TouchableOpacity>
           )}
         </View>
       </View>
+
+      {renderSearchFilters()}
 
       {searching ? (
         <View style={styles.loadingContainer}>
@@ -189,7 +280,7 @@ const SearchScreen = () => {
             Searching...
           </Text>
         </View>
-      ) : searched && results.length === 0 ? (
+      ) : searched && categorizedResults.length === 0 ? (
         <View style={styles.emptyContainer}>
           <MaterialIcons 
             name="search-off" 
@@ -210,21 +301,15 @@ const SearchScreen = () => {
           </Text>
         </View>
       ) : (
-        <FlatList
-          data={results}
+        <SectionList
+          sections={categorizedResults}
           renderItem={renderItem}
+          renderSectionHeader={renderSectionHeader}
           keyExtractor={item => `${item.type}-${item.id}`}
           contentContainerStyle={styles.resultsList}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          ListHeaderComponent={results.length > 0 ? (
-            <Text style={[
-              styles.resultsCount,
-              { color: isDarkMode ? colors.lightGray : colors.mediumGray }
-            ]}>
-              {results.length} {results.length === 1 ? 'result' : 'results'} found
-            </Text>
-          ) : null}
+          stickySectionHeadersEnabled={true}
         />
       )}
     </SafeAreaView>
@@ -236,27 +321,27 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
+    paddingTop: 40,
+    paddingBottom: 12,
+    backgroundColor: colors.black,
+    gap: 16,
   },
-  backButton: {
-    padding: 8,
-    marginLeft: -8,
+  headerTitle: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: colors.white,
+    letterSpacing: 0.5,
   },
   searchBar: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 12,
-    paddingHorizontal: 12,
+    borderRadius: 24,
+    paddingHorizontal: 16,
     height: 48,
-    borderWidth: 1,
   },
   searchIcon: {
-    marginRight: 8,
+    marginRight: 12,
   },
   searchInput: {
     flex: 1,
@@ -266,12 +351,50 @@ const styles = StyleSheet.create({
   clearButton: {
     padding: 4,
   },
+  filtersContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 8,
+  },
+  filterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.darkGray,
+    backgroundColor: 'transparent',
+    gap: 6,
+  },
+  filterButtonActive: {
+    backgroundColor: colors.primary + '20',
+    borderColor: colors.primary,
+  },
+  filterIcon: {
+    marginRight: 2,
+  },
+  filterText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  filterTextActive: {
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  sectionHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
   resultsList: {
     padding: 16,
-  },
-  resultsCount: {
-    fontSize: 14,
-    marginBottom: 16,
   },
   resultItem: {
     flexDirection: 'row',
@@ -285,8 +408,8 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   posterContainer: {
-    width: 90,
-    height: 135,
+    width: POSTER_WIDTH,
+    height: POSTER_HEIGHT,
     borderRadius: 8,
     overflow: 'hidden',
     backgroundColor: colors.darkBackground,
@@ -315,15 +438,8 @@ const styles = StyleSheet.create({
   yearText: {
     fontSize: 14,
   },
-  typeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  typeText: {
-    color: colors.white,
-    fontSize: 12,
-    fontWeight: '600',
+  genreText: {
+    fontSize: 14,
   },
   loadingContainer: {
     flex: 1,

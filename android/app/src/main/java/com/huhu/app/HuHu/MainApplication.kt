@@ -1,4 +1,4 @@
-package com.stremiomobile
+package com.huhu.app
 
 import android.app.Application
 import androidx.multidex.MultiDexApplication
@@ -12,7 +12,7 @@ import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.facebook.react.defaults.DefaultReactNativeHost
 import com.facebook.react.soloader.OpenSourceMergedSoMapping
 import com.facebook.soloader.SoLoader
-import com.stremiomobile.videoplayer.VideoPlayerPackage
+import com.huhu.app.videoplayer.VideoPlayerPackage
 
 class MainApplication : MultiDexApplication(), ReactApplication {
 
