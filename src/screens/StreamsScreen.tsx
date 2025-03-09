@@ -10,7 +10,8 @@ import {
   Platform,
   ImageBackground,
   ScrollView,
-  StatusBar
+  StatusBar,
+  Alert
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { RouteProp } from '@react-navigation/native';
@@ -40,18 +41,25 @@ import Animated, {
   cancelAnimation,
   SharedValue
 } from 'react-native-reanimated';
+import { torrentService } from '../services/torrentService';
+import { TorrentProgress } from '../services/torrentService';
 
 const TMDB_LOGO = 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/89/Tmdb.new.logo.svg/512px-Tmdb.new.logo.svg.png?20200406190906';
 const HDR_ICON = 'https://uxwing.com/wp-content/themes/uxwing/download/video-photography-multimedia/hdr-icon.png';
 const DOLBY_ICON = 'https://upload.wikimedia.org/wikipedia/en/thumb/3/3f/Dolby_Vision_%28logo%29.svg/512px-Dolby_Vision_%28logo%29.svg.png?20220908042900';
 
 // Extracted Components
-const StreamCard = memo(({ stream, onPress, index }: { stream: Stream; onPress: () => void; index: number }) => {
+const StreamCard = memo(({ stream, onPress, index, torrentProgress }: { 
+  stream: Stream; 
+  onPress: () => void; 
+  index: number;
+  torrentProgress?: TorrentProgress;
+}) => {
   const quality = stream.title?.match(/(\d+)p/)?.[1] || null;
   const isHDR = stream.title?.toLowerCase().includes('hdr');
   const isDolby = stream.title?.toLowerCase().includes('dolby') || stream.title?.includes('DV');
   const size = stream.title?.match(/💾\s*([\d.]+\s*[GM]B)/)?.[1];
-  const isTorrent = stream.url?.startsWith('magnet:');
+  const isTorrent = stream.url?.startsWith('magnet:') || stream.behaviorHints?.isMagnetStream;
   const isDebrid = stream.behaviorHints?.cached;
 
   const displayTitle = stream.name || stream.title || 'Unnamed Stream';
@@ -64,24 +72,42 @@ const StreamCard = memo(({ stream, onPress, index }: { stream: Stream; onPress: 
       .mass(0.9)
   , [index]);
 
+  const handlePress = useCallback(() => {
+    console.log('StreamCard pressed:', {
+      isTorrent,
+      isDebrid,
+      hasProgress: !!torrentProgress,
+      url: stream.url,
+      behaviorHints: stream.behaviorHints
+    });
+    onPress();
+  }, [isTorrent, isDebrid, torrentProgress, stream.url, stream.behaviorHints, onPress]);
+
+  // Only disable if it's a torrent that's not debrid and not currently downloading
+  const isDisabled = isTorrent && !isDebrid && !torrentProgress && !stream.behaviorHints?.notWebReady;
+
   return (
     <Animated.View entering={entering}>
       <TouchableOpacity 
-        onPress={onPress} 
+        onPress={handlePress}
         style={[
           styles.streamCard,
-          isTorrent && styles.streamCardDisabled
+          isDisabled && styles.streamCardDisabled
         ]}
         activeOpacity={0.7}
-        disabled={isTorrent}
+        disabled={false} // Never disable the TouchableOpacity to allow starting torrent downloads
       >
         <View style={styles.streamCardLeft}>
           <View style={styles.streamTypeContainer}>
-            <MaterialIcons 
-              name={isTorrent ? 'block' : 'play-circle-outline'} 
-              size={20} 
-              color={isTorrent ? colors.error : colors.text} 
-            />
+            {torrentProgress ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <MaterialIcons 
+                name={isTorrent && !isDebrid ? 'download' : 'play-circle-outline'} 
+                size={20} 
+                color={isTorrent && !isDebrid ? colors.textMuted : colors.text} 
+              />
+            )}
             {isDebrid && !isTorrent && (
               <MaterialIcons 
                 name="cloud-done" 
@@ -119,14 +145,24 @@ const StreamCard = memo(({ stream, onPress, index }: { stream: Stream; onPress: 
               {size && (
                 <QualityTag text={size} color={colors.darkGray} />
               )}
+              {torrentProgress && (
+                <QualityTag 
+                  text={`${torrentProgress.bufferProgress}%`} 
+                  color={colors.primary} 
+                />
+              )}
             </View>
 
             {stream.title && (
               <Text style={[
                 styles.sourceText,
-                isTorrent && styles.sourceTextDisabled
+                isTorrent && !isDebrid && !torrentProgress && styles.sourceTextDisabled
               ]} numberOfLines={1}>
-                {isTorrent ? 'Magnet links are not supported' : stream.title}
+                {isTorrent && !isDebrid ? (
+                  torrentProgress ? 
+                    `Downloading... ${(torrentProgress.downloadSpeed / (1024 * 1024)).toFixed(2)} MB/s • ${torrentProgress.seeds} seeds` :
+                    'Magnet link - Click to start downloading'
+                ) : stream.title}
               </Text>
             )}
           </View>
@@ -134,7 +170,7 @@ const StreamCard = memo(({ stream, onPress, index }: { stream: Stream; onPress: 
 
         <View style={styles.streamCardRight}>
           <MaterialIcons 
-            name="play-arrow" 
+            name={torrentProgress ? 'downloading' : 'play-arrow'} 
             size={24} 
             color={colors.text} 
           />
@@ -145,7 +181,8 @@ const StreamCard = memo(({ stream, onPress, index }: { stream: Stream; onPress: 
 }, (prevProps, nextProps) => {
   // Custom comparison to prevent unnecessary re-renders
   return prevProps.stream.url === nextProps.stream.url &&
-         prevProps.index === nextProps.index;
+         prevProps.index === nextProps.index &&
+         prevProps.torrentProgress?.bufferProgress === nextProps.torrentProgress?.bufferProgress;
 });
 
 const QualityTag = React.memo(({ text, color }: { text: string; color: string }) => (
@@ -232,6 +269,10 @@ export const StreamsScreen = () => {
   const heroScale = useSharedValue(0.95);
   const filterOpacity = useSharedValue(0);
 
+  // Add new state for torrent progress
+  const [torrentProgress, setTorrentProgress] = React.useState<{[key: string]: TorrentProgress}>({});
+  const [activeTorrent, setActiveTorrent] = React.useState<string | null>(null);
+
   React.useEffect(() => {
     if (type === 'series' && episodeId) {
       setSelectedEpisode(episodeId);
@@ -292,31 +333,138 @@ export const StreamsScreen = () => {
     );
   }, [selectedEpisode, groupedEpisodes, id]);
 
+  // Update handleStreamPress
   const handleStreamPress = useCallback(async (stream: Stream) => {
     try {
-      if (stream.url && !stream.url.startsWith('magnet:')) {
-        // Handle regular streams using VideoPlayerService
-        await VideoPlayerService.playVideo(stream.url, {
-          title: metadata?.name || '',
-          headers: stream.headers,
-          subtitleUrl: stream.subtitles?.[0]?.url,
-          subtitleLanguage: stream.subtitles?.[0]?.lang || 'en',
-          episodeTitle: type === 'series' ? currentEpisode?.name : undefined,
-          episodeNumber: type === 'series' ? 
-            `S${currentEpisode?.season_number.toString().padStart(2, '0')}E${currentEpisode?.episode_number.toString().padStart(2, '0')}` 
-            : undefined,
-          releaseDate: metadata?.released
+      if (stream.url) {
+        console.log('handleStreamPress called with stream:', {
+          url: stream.url,
+          behaviorHints: stream.behaviorHints,
+          isMagnet: stream.url.startsWith('magnet:'),
+          isMagnetStream: stream.behaviorHints?.isMagnetStream
         });
-      } else {
-        // Show error for magnet links
-        console.error('Magnet links are not supported');
-        // You might want to show a toast or alert here
+        
+        // Check if it's a magnet link either directly or through behaviorHints
+        const isMagnet = stream.url.startsWith('magnet:') || stream.behaviorHints?.isMagnetStream;
+        
+        if (isMagnet) {
+          console.log('Handling magnet link...');
+          // Check if there's already an active torrent
+          if (activeTorrent && activeTorrent !== stream.url) {
+            Alert.alert(
+              'Active Download',
+              'There is already an active download. Do you want to stop it and start this one?',
+              [
+                {
+                  text: 'Cancel',
+                  style: 'cancel'
+                },
+                {
+                  text: 'Stop and Switch',
+                  style: 'destructive',
+                  onPress: () => {
+                    console.log('Stopping current torrent and starting new one');
+                    torrentService.stopStream();
+                    startTorrentStream(stream);
+                  }
+                }
+              ]
+            );
+            return;
+          }
+
+          console.log('Starting torrent stream...');
+          startTorrentStream(stream);
+        } else {
+          console.log('Playing regular stream...');
+          // Handle regular streams using VideoPlayerService
+          await VideoPlayerService.playVideo(stream.url, {
+            title: metadata?.name || '',
+            headers: stream.headers,
+            subtitleUrl: stream.subtitles?.[0]?.url,
+            subtitleLanguage: stream.subtitles?.[0]?.lang || 'en',
+            episodeTitle: type === 'series' ? currentEpisode?.name : undefined,
+            episodeNumber: type === 'series' ? 
+              `S${currentEpisode?.season_number.toString().padStart(2, '0')}E${currentEpisode?.episode_number.toString().padStart(2, '0')}` 
+              : undefined,
+            releaseDate: metadata?.released
+          });
+        }
       }
     } catch (error) {
       console.error('Stream error:', error);
-      // Handle error (show toast, alert, etc.)
+      Alert.alert(
+        'Playback Error',
+        error instanceof Error ? error.message : 'An error occurred while playing the video'
+      );
+    }
+  }, [metadata, type, currentEpisode, activeTorrent]);
+
+  // Add function to handle torrent streaming
+  const startTorrentStream = useCallback(async (stream: Stream) => {
+    if (!stream.url) return;
+
+    try {
+      console.log('Starting torrent stream with URL:', stream.url);
+      setActiveTorrent(stream.url);
+      
+      const videoPath = await torrentService.startStream(stream.url, {
+        onProgress: (progress) => {
+          console.log('Torrent progress:', progress);
+          setTorrentProgress(prev => ({
+            ...prev,
+            [stream.url!]: progress
+          }));
+
+          // If buffering is complete, start playback
+          if (progress.bufferProgress >= 100) {
+            console.log('Torrent buffering complete, starting playback');
+            setActiveTorrent(null);
+            setTorrentProgress(prev => {
+              const newProgress = { ...prev };
+              delete newProgress[stream.url!];
+              return newProgress;
+            });
+          }
+        }
+      });
+      
+      console.log('Got video path:', videoPath);
+      
+      // Once we have the video file path, play it using VideoPlayerService
+      await VideoPlayerService.playVideo(`file://${videoPath}`, {
+        title: metadata?.name || '',
+        episodeTitle: type === 'series' ? currentEpisode?.name : undefined,
+        episodeNumber: type === 'series' ? 
+          `S${currentEpisode?.season_number.toString().padStart(2, '0')}E${currentEpisode?.episode_number.toString().padStart(2, '0')}` 
+          : undefined,
+        releaseDate: metadata?.released
+      });
+    } catch (error) {
+      console.error('Torrent error:', error);
+      setActiveTorrent(null);
+      setTorrentProgress(prev => {
+        const newProgress = { ...prev };
+        if (stream.url) {
+          delete newProgress[stream.url];
+        }
+        return newProgress;
+      });
+      Alert.alert(
+        'Download Error',
+        error instanceof Error ? error.message : 'An error occurred while downloading the video'
+      );
     }
   }, [metadata, type, currentEpisode]);
+
+  // Clean up torrent on unmount
+  React.useEffect(() => {
+    return () => {
+      if (activeTorrent) {
+        torrentService.stopStream();
+      }
+    };
+  }, [activeTorrent]);
 
   const filterItems = useMemo(() => {
     const installedAddons = stremioService.getInstalledAddons();
@@ -353,6 +501,21 @@ export const StreamsScreen = () => {
   const sections = useMemo(() => {
     const streams = type === 'series' ? episodeStreams : groupedStreams;
     const installedAddons = stremioService.getInstalledAddons();
+
+    // Add test torrent stream for development
+    if (__DEV__) {
+      streams['test_addon'] = {
+        addonName: 'Test Addon',
+        streams: [{
+          url: 'magnet:?xt=urn:btih:88594aaacbde40ef3e2510c47374ec0aa396c08e&dn=bbb%5Fsunflower%5F1080p%5F30fps%5Fnormal.mp4&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.publicbt.com%3A80%2Fannounce&ws=http%3A%2F%2Fdistribution.bbb3d.renderfarming.net%2Fvideo%2Fmp4%2Fbbb%5Fsunflower%5F1080p%5F30fps%5Fnormal.mp4',
+          title: 'Test Torrent Stream (Big Buck Bunny 1080p)',
+          name: 'Big Buck Bunny 1080p',
+          behaviorHints: {
+            notWebReady: true,
+          }
+        }]
+      };
+    }
 
     return Object.entries(streams)
       .filter(([addonId]) => selectedProvider === 'all' || selectedProvider === addonId)
@@ -407,8 +570,9 @@ export const StreamsScreen = () => {
       stream={item} 
       onPress={() => handleStreamPress(item)}
       index={index}
+      torrentProgress={item.url ? torrentProgress[item.url] : undefined}
     />
-  ), [handleStreamPress]);
+  ), [handleStreamPress, torrentProgress]);
 
   const renderSectionHeader = useCallback(({ section }: { section: { title: string } }) => (
     <Animated.View
