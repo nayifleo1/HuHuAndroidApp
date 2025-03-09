@@ -241,7 +241,7 @@ const MetadataScreen = () => {
   const heroAnimatedStyle = useAnimatedStyle(() => ({
     width: '100%',
     height: heroHeight.value,
-    backgroundColor: '#000'
+    backgroundColor: colors.black
   }));
 
   // Animated styles for the content
@@ -1059,21 +1059,32 @@ const MetadataScreen = () => {
   };
 
   // Update handleSeasonChange
-  const handleSeasonChange = (seasonNumber: number) => {
+  const handleSeasonChange = useCallback((seasonNumber: number) => {
     if (selectedSeason === seasonNumber) return;
     
     setChangingSeasons(true);
-    // Update metadata first
-    setSelectedSeason(seasonNumber);
-    setEpisodes(groupedEpisodes[seasonNumber] || []);
     
-    // Then handle animation
-    fadeAnim.value = withTiming(0, { duration: 100 }, () => {
-      fadeAnim.value = withTiming(1, { duration: 150 }, () => {
-        runOnJS(setChangingSeasons)(false);
+    // Use requestAnimationFrame to batch the updates
+    requestAnimationFrame(() => {
+      // Update metadata first
+      setSelectedSeason(seasonNumber);
+      // Use a memoized episodes array
+      setEpisodes(groupedEpisodes[seasonNumber] || []);
+      
+      // Optimize animation
+      fadeAnim.value = withTiming(0, { 
+        duration: 150,
+        easing: Easing.out(Easing.ease)
+      }, () => {
+        fadeAnim.value = withTiming(1, { 
+          duration: 200,
+          easing: Easing.in(Easing.ease)
+        }, () => {
+          runOnJS(setChangingSeasons)(false);
+        });
       });
     });
-  };
+  }, [selectedSeason, groupedEpisodes, fadeAnim]);
 
   // Modify handleEpisodeSelect to always load fresh streams
   const handleEpisodeSelect = (episode: Episode) => {
@@ -1109,7 +1120,7 @@ const MetadataScreen = () => {
     };
   }, []);
 
-  // Update episode card rendering with FastImage and animation
+  // Optimize episode rendering with memo
   const renderEpisodeCard = useCallback((episode: Episode) => {
     const isSelected = selectedEpisode === (episode.stremioId || `${id}:${episode.season_number}:${episode.episode_number}`);
     
@@ -1177,7 +1188,7 @@ const MetadataScreen = () => {
     );
   }, [selectedEpisode, metadata?.poster, handleEpisodeSelect, episodeCardAnimatedStyle]);
 
-  // Update episodes section rendering to show loading state
+  // Update episodes section rendering with FlatList for better performance
   const renderEpisodesSection = useCallback(() => {
     if (loadingSeasons) {
       return (
@@ -1202,16 +1213,28 @@ const MetadataScreen = () => {
         <Text style={styles.episodesSectionTitle}>
           {episodes.length} Episodes
         </Text>
-        {episodes.map((episode) => (
-          <View key={episode.id}>
-            {renderEpisodeCard(episode)}
-          </View>
-        ))}
+        <FlatList
+          data={episodes}
+          renderItem={({ item }) => renderEpisodeCard(item)}
+          keyExtractor={(item) => item.id.toString()}
+          removeClippedSubviews={true}
+          maxToRenderPerBatch={8}
+          windowSize={5}
+          initialNumToRender={8}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.episodesList}
+        />
       </>
     );
   }, [episodes, loadingSeasons, renderEpisodeCard]);
 
   const handlePlayStream = async (stream: Stream) => {
+    // Get the current episode information if we're playing a series
+    const currentEpisode = selectedEpisode ? episodes.find(ep => 
+      ep.stremioId === selectedEpisode || 
+      `${id}:${ep.season_number}:${ep.episode_number}` === selectedEpisode
+    ) : null;
+
     if (settings.useExternalPlayer) {
       try {
         await VideoPlayerService.playVideo(stream.url, {
@@ -1240,7 +1263,14 @@ const MetadataScreen = () => {
           useExternalPlayer: false,
           title: metadata?.name,
           poster: metadata?.poster,
+          releaseDate: type === 'movie' ? metadata?.year?.toString() : undefined
         };
+
+        // Add episode information if available
+        if (currentEpisode) {
+          options.episodeTitle = currentEpisode.name;
+          options.episodeNumber = currentEpisode.episodeString;
+        }
         
         // Add subtitle if available
         if (stream.subtitles && stream.subtitles.length > 0) {
@@ -1300,7 +1330,7 @@ const MetadataScreen = () => {
         onPress={() => handlePlayStream(stream)}
         style={[
           styles.streamCard,
-          { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)' }
+          { backgroundColor: isDarkMode ? colors.transparentLight : 'rgba(0,0,0,0.03)' }
         ]}
       >
         {/* Left side - Stream info */}
@@ -1310,13 +1340,13 @@ const MetadataScreen = () => {
             <MaterialIcons 
               name={isTorrent ? 'downloading' : 'play-circle-outline'} 
               size={20} 
-              color={isDarkMode ? '#fff' : '#000'} 
+              color={isDarkMode ? colors.text : colors.black} 
             />
             {isDebrid && (
               <MaterialIcons 
                 name="cloud-done" 
                 size={16} 
-                color="#4caf50"
+                color={colors.success}
                 style={styles.debridIcon}
               />
             )}
@@ -1325,7 +1355,7 @@ const MetadataScreen = () => {
           {/* Stream content */}
           <View style={styles.streamContent}>
             <Text 
-              style={[styles.streamTitle, { color: isDarkMode ? '#fff' : '#000' }]} 
+              style={[styles.streamTitle, { color: isDarkMode ? colors.text : colors.black }]} 
               numberOfLines={2}
             >
               {displayTitle}
@@ -1334,22 +1364,22 @@ const MetadataScreen = () => {
             {/* Primary tags (Quality, HDR, Dolby) */}
             <View style={styles.primaryTags}>
               {quality && (
-                <View style={[styles.qualityTag, { backgroundColor: '#2196f3' }]}>
+                <View style={[styles.qualityTag, { backgroundColor: colors.info }]}>
                   <Text style={styles.tagText}>{quality}p</Text>
                 </View>
               )}
               {isHDR && (
-                <View style={[styles.qualityTag, { backgroundColor: '#ff9800' }]}>
+                <View style={[styles.qualityTag, { backgroundColor: colors.warning }]}>
                   <Text style={styles.tagText}>HDR</Text>
                 </View>
               )}
               {isDolby && (
-                <View style={[styles.qualityTag, { backgroundColor: '#7b1fa2' }]}>
+                <View style={[styles.qualityTag, { backgroundColor: colors.accentDark }]}>
                   <Text style={styles.tagText}>DOLBY</Text>
                 </View>
               )}
               {size && (
-                <View style={[styles.qualityTag, { backgroundColor: '#455a64' }]}>
+                <View style={[styles.qualityTag, { backgroundColor: colors.darkGray }]}>
                   <Text style={styles.tagText}>{size}</Text>
                 </View>
               )}
@@ -1369,7 +1399,7 @@ const MetadataScreen = () => {
           <MaterialIcons 
             name="play-arrow" 
             size={24} 
-            color={isDarkMode ? '#fff' : '#000'} 
+            color={isDarkMode ? colors.text : colors.black} 
           />
         </View>
       </TouchableOpacity>
@@ -1475,14 +1505,14 @@ const MetadataScreen = () => {
         >
           <LinearGradient
             colors={[
-              'rgba(0,0,0,0.4)',
-              'rgba(0,0,0,0.6)',
-              'rgba(0,0,0,0.75)',
-              'rgba(0,0,0,0.85)',
-              'rgba(0,0,0,0.95)',
-              '#000'
+              `${colors.darkBackground}00`, // fully transparent
+              `${colors.darkBackground}15`, // 8% opacity
+              `${colors.darkBackground}40`, // 25% opacity
+              `${colors.darkBackground}B3`, // 70% opacity
+              `${colors.darkBackground}E6`, // 90% opacity
+              colors.darkBackground      // solid background color
             ]}
-            locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
+            locations={[0, 0.4, 0.6, 0.8, 0.9, 1]}
             style={styles.streamsHeroGradient}
           >
             <View style={styles.streamsHeroContent}>
@@ -1613,7 +1643,11 @@ const MetadataScreen = () => {
                     resizeMode={FastImage.resizeMode.cover}
                   />
                 ) : (
-                  <MaterialIcons name="person" size={40} color="rgba(255,255,255,0.5)" />
+                  <MaterialIcons 
+                    name="person" 
+                    size={40} 
+                    color={colors.textMuted} 
+                  />
                 )}
               </View>
               <Text style={styles.castName} numberOfLines={1}>{member.name}</Text>
@@ -1747,7 +1781,11 @@ const MetadataScreen = () => {
                       />
                     ) : (
                       <View style={[styles.modalImage, styles.castImagePlaceholder]}>
-                        <MaterialIcons name="person" size={50} color="rgba(255,255,255,0.5)" />
+                        <MaterialIcons 
+                          name="person" 
+                          size={50} 
+                          color={colors.textMuted} 
+                        />
                       </View>
                     )}
                   </View>
@@ -1866,21 +1904,27 @@ const MetadataScreen = () => {
       <View style={styles.streamGroup}>
         <View style={styles.skeletonTitle} />
         {[1, 2, 3].map((_, index) => (
-          <View key={index} style={[
-            styles.streamCard,
-            styles.skeletonCard,
-            { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)' }
-          ]}>
+          <View 
+            key={index}
+            style={[
+              styles.streamCard, 
+              styles.skeletonCard, 
+              { backgroundColor: isDarkMode ? colors.transparentLight : 'rgba(0,0,0,0.03)' }
+            ]}
+          >
             <View style={styles.streamCardLeft}>
-              <View style={[styles.skeletonIcon, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]} />
+              <View style={[styles.skeletonIcon, { backgroundColor: isDarkMode ? colors.transparentLight : 'rgba(0,0,0,0.1)' }]} />
               <View style={styles.streamContent}>
-                <View style={[styles.skeletonText, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)', width: '80%' }]} />
+                <View style={[styles.skeletonText, { backgroundColor: isDarkMode ? colors.transparentLight : 'rgba(0,0,0,0.1)', width: '80%' }]} />
                 <View style={styles.primaryTags}>
-                  <View style={[styles.skeletonTag, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]} />
-                  <View style={[styles.skeletonTag, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]} />
+                  <View style={[styles.skeletonTag, { backgroundColor: isDarkMode ? colors.transparentLight : 'rgba(0,0,0,0.1)' }]} />
+                  <View style={[styles.skeletonTag, { backgroundColor: isDarkMode ? colors.transparentLight : 'rgba(0,0,0,0.1)' }]} />
                 </View>
-                <View style={[styles.skeletonText, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)', width: '60%' }]} />
+                <View style={[styles.skeletonText, { backgroundColor: isDarkMode ? colors.transparentLight : 'rgba(0,0,0,0.1)', width: '60%' }]} />
               </View>
+            </View>
+            <View style={styles.streamCardRight}>
+              <View style={[styles.skeletonIcon, { backgroundColor: isDarkMode ? colors.transparentLight : 'rgba(0,0,0,0.1)' }]} />
             </View>
           </View>
         ))}
@@ -2099,7 +2143,7 @@ const MetadataScreen = () => {
 
   if (loading) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#000' : '#fff' }]}>
+      <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? colors.darkBackground : colors.white }]}>
         <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
@@ -2110,11 +2154,11 @@ const MetadataScreen = () => {
 
   if (error || !metadata) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#000' : '#fff' }]}>
+      <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? colors.darkBackground : colors.white }]}>
         <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <View style={styles.errorContainer}>
-          <MaterialIcons name="error-outline" size={64} color={isDarkMode ? '#666' : '#999'} />
-          <Text style={[styles.errorText, { color: isDarkMode ? '#fff' : '#000' }]}>
+          <MaterialIcons name="error-outline" size={64} color={isDarkMode ? colors.textMuted : colors.mediumGray} />
+          <Text style={[styles.errorText, { color: isDarkMode ? colors.text : colors.black }]}>
             {error || 'Content not found'}
           </Text>
           <TouchableOpacity
@@ -2135,7 +2179,7 @@ const MetadataScreen = () => {
   }
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#000' : '#fff' }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? colors.darkBackground : colors.white }]}>
       <StatusBar
         translucent
         backgroundColor="transparent"
@@ -2161,14 +2205,14 @@ const MetadataScreen = () => {
               >
                 <LinearGradient
                   colors={[
-                    'rgba(0,0,0,0.4)',
-                    'rgba(0,0,0,0.6)',
-                    'rgba(0,0,0,0.75)',
-                    'rgba(0,0,0,0.85)',
-                    'rgba(0,0,0,0.95)',
-                    '#000'
+                    `${colors.darkBackground}00`, // fully transparent
+                    `${colors.darkBackground}15`, // 8% opacity
+                    `${colors.darkBackground}40`, // 25% opacity
+                    `${colors.darkBackground}B3`, // 70% opacity
+                    `${colors.darkBackground}E6`, // 90% opacity
+                    colors.darkBackground      // solid background color
                   ]}
-                  locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
+                  locations={[0, 0.4, 0.6, 0.8, 0.9, 1]}
                   style={styles.heroGradient}
                 >
                   <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.heroContent}>
@@ -2504,7 +2548,7 @@ const styles = StyleSheet.create({
   heroSection: {
     width: '100%',
     height: height * 0.75,
-    backgroundColor: '#000',
+    backgroundColor: colors.black,
   },
   heroGradient: {
     flex: 1,
@@ -2518,58 +2562,66 @@ const styles = StyleSheet.create({
   genreContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 16,
+    gap: 10,
+    marginBottom: 20,
   },
   genreChip: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: colors.elevation3,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   genreText: {
-    color: '#fff',
+    color: colors.highEmphasis,
     fontSize: 12,
     fontWeight: '600',
   },
   titleLogo: {
-    width: width * 0.6,
-    height: 80,
+    width: width * 0.65,
+    height: 90,
     marginBottom: 16,
   },
   titleText: {
-    color: '#fff',
-    fontSize: 32,
+    color: colors.highEmphasis,
+    fontSize: 34,
     fontWeight: '900',
     marginBottom: 16,
     textShadowColor: 'rgba(0,0,0,0.75)',
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 4,
+    letterSpacing: -0.5,
   },
   metaInfo: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 16,
+    marginBottom: 20,
+    flexWrap: 'wrap',
   },
   metaChip: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: colors.elevation3,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   metaChipText: {
-    color: '#fff',
+    color: colors.highEmphasis,
     fontSize: 12,
     fontWeight: '600',
   },
   ratingContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: colors.elevation3,
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   imdbLogo: {
     width: 40,
@@ -2582,48 +2634,65 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   descriptionContainer: {
-    marginBottom: 24,
+    marginBottom: 28,
   },
   description: {
-    color: 'rgba(255,255,255,0.9)',
+    color: colors.mediumEmphasis,
     fontSize: 15,
-    lineHeight: 22,
+    lineHeight: 24,
   },
   showMoreButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: 10,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    alignSelf: 'flex-start',
   },
   showMoreText: {
-    color: 'rgba(255,255,255,0.7)',
+    color: colors.highEmphasis,
     fontSize: 14,
     marginRight: 4,
+    fontWeight: '500',
   },
   actionButtons: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 16,
     alignItems: 'center',
+    marginBottom: 0,
   },
   actionButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderRadius: 100,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   iconButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.elevation3,
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: colors.white,
     alignItems: 'center',
     justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   playButton: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.white,
   },
   playButtonText: {
     color: '#000',
@@ -2696,10 +2765,13 @@ const styles = StyleSheet.create({
   streamCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 8,
-    borderRadius: 8,
-    marginBottom: 4,
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 8,
     minHeight: 70,
+    backgroundColor: colors.elevation1,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
   },
   streamCardLeft: {
     flex: 1,
@@ -2723,6 +2795,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 6,
     lineHeight: 20,
+    color: colors.highEmphasis,
   },
   primaryTags: {
     flexDirection: 'row',
@@ -2736,7 +2809,7 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   tagText: {
-    color: '#fff',
+    color: colors.highEmphasis,
     fontSize: 12,
     fontWeight: '600',
   },
@@ -2744,7 +2817,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: colors.elevation2,
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 12,
@@ -2755,7 +2828,7 @@ const styles = StyleSheet.create({
     padding: 32,
   },
   loadingText: {
-    color: '#fff',
+    color: colors.highEmphasis,
     marginTop: 16,
     fontSize: 16,
   },
@@ -2765,353 +2838,163 @@ const styles = StyleSheet.create({
     padding: 32,
   },
   noStreamsText: {
-    color: '#fff',
+    color: colors.highEmphasis,
     marginTop: 16,
     fontSize: 16,
-  },
-  backButton: {
-    position: 'absolute',
-    top: Platform.OS === 'android' ? 35 : 45,
-    left: 16,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   episodesContainer: {
     flex: 1,
     paddingTop: 16,
   },
   episodesSectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#fff',
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.highEmphasis,
     marginBottom: 16,
-    marginTop: 24,
+    marginTop: 8,
     paddingHorizontal: 16,
   },
   episodeContainer: {
+    paddingHorizontal: 16,
     marginBottom: 16,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.05)',
   },
   episodeCard: {
     flexDirection: 'row',
-    padding: 12,
-    alignItems: 'center',
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: colors.elevation1,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    elevation: 2,
   },
   episodeCardSelected: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderColor: colors.primary,
+    backgroundColor: colors.elevation2,
+    borderWidth: 2,
   },
   episodeImageContainer: {
+    width: 140,
+    height: 80,
     position: 'relative',
-    width: 160,
-    height: 90,
-    borderRadius: 4,
-    overflow: 'hidden',
   },
   episodeImage: {
-    width: 160,
-    height: 90,
-    borderRadius: 4,
-    backgroundColor: '#333',
-  },
-  episodeImageLoading: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    zIndex: 1,
+    width: '100%',
+    height: '100%',
   },
   episodeImagePlaceholder: {
+    backgroundColor: colors.elevation2,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)',
   },
   episodeNumberBadge: {
     position: 'absolute',
     top: 8,
     left: 8,
-    backgroundColor: `${colors.primary}CC`,
-    borderRadius: 12,
-    width: 24,
-    height: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: colors.primary,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
   },
   episodeNumberText: {
-    color: '#fff',
-    fontSize: 12,
+    color: colors.textDark,
+    fontSize: 10,
     fontWeight: 'bold',
   },
   episodeInfo: {
     flex: 1,
-    marginLeft: 12,
+    padding: 12,
+    justifyContent: 'space-between',
   },
   episodeHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  episodeExpandIcon: {
-    marginLeft: 8,
+    marginBottom: 4,
   },
   episodeNumber: {
-    fontSize: 12,
     color: colors.primary,
+    fontSize: 12,
     fontWeight: 'bold',
   },
   episodeTitle: {
-    fontSize: 14,
+    color: colors.highEmphasis,
+    fontSize: 15,
     fontWeight: '600',
-    color: '#fff',
-    marginVertical: 4,
+    marginBottom: 4,
   },
   episodeReleased: {
+    color: colors.mediumEmphasis,
     fontSize: 12,
-    color: 'rgba(255,255,255,0.7)',
   },
   episodeRating: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 4,
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
   },
   episodeRatingText: {
-    color: '#FFD700',
+    color: colors.mediumEmphasis,
     fontSize: 12,
     marginLeft: 4,
     fontWeight: '600',
   },
-  streamsContent: {
-    flex: 1,
-  },
-  streamsBackButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    padding: 14,
-    paddingTop: Platform.OS === 'android' ? 35 : 45,
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    zIndex: 1,
-  },
-  streamsBackText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  fullScreenContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#000',
-    zIndex: 1000,
-  },
-  streamsMainContent: {
-    flex: 1,
-    backgroundColor: '#000',
-    paddingTop: 20,
-  },
   castSection: {
-    marginTop: -30,
-    paddingLeft: 16,
+    marginTop: 0,
+    paddingLeft: 0,
   },
   castScrollContainer: {
-    marginTop: 12,
+    marginTop: 8,
   },
   castContainer: {
-    paddingVertical: 0,
-    paddingRight: 16,
-    flexDirection: 'row',
+    marginVertical: 8,
+  },
+  castTitle: {
+    color: colors.highEmphasis,
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 12,
+    marginLeft: 16,
+  },
+  castList: {
+    paddingLeft: 16,
+    paddingRight: 0,
   },
   castMember: {
-    alignItems: 'center',
     width: 100,
     marginRight: 16,
+    alignItems: 'center',
   },
   castImageContainer: {
     width: 80,
     height: 80,
     borderRadius: 40,
+    backgroundColor: colors.elevation2,
+    justifyContent: 'center',
+    alignItems: 'center',
     overflow: 'hidden',
     marginBottom: 8,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   castImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
+    width: 80,
+    height: 80,
+    borderRadius: 40,
   },
   castImagePlaceholder: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: colors.elevation2,
     justifyContent: 'center',
     alignItems: 'center',
   },
   castName: {
-    color: '#fff',
+    color: colors.highEmphasis,
     fontSize: 14,
     fontWeight: '600',
     textAlign: 'center',
-    marginBottom: 4,
-    width: '100%',
-    paddingHorizontal: 4,
   },
   castCharacter: {
-    color: 'rgba(255,255,255,0.7)',
+    color: colors.mediumEmphasis,
     fontSize: 12,
     textAlign: 'center',
-    width: '100%',
-    paddingHorizontal: 4,
-  },
-  modalContainer: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-end',
-    zIndex: 1000,
-  },
-  modalOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'transparent',
-  },
-  modalOverlayTouchable: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  modalContent: {
-    backgroundColor: '#141414',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: '90%',
-    width: '100%',
-    overflow: 'hidden',
-  },
-  modalDragHandle: {
-    width: 40,
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginTop: 12,
-    marginBottom: 8,
-  },
-  modalCloseButton: {
-    position: 'absolute',
-    top: 16,
-    right: 16,
-    zIndex: 1,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalScroll: {
-    maxHeight: '90%',
-  },
-  modalHeader: {
-    padding: 24,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  modalImageContainer: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    overflow: 'hidden',
-    marginRight: 16,
-  },
-  modalImage: {
-    width: 120,
-    height: 120,
-  },
-  modalHeaderInfo: {
-    flex: 1,
-  },
-  modalName: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  modalCharacter: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 16,
-  },
-  modalLoading: {
-    padding: 24,
-    alignItems: 'center',
-  },
-  modalDetails: {
-    padding: 24,
-    paddingTop: 0,
-  },
-  modalDetailRow: {
-    marginBottom: 16,
-  },
-  modalDetailLabel: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  modalDetailText: {
-    color: '#fff',
-    fontSize: 16,
-  },
-  modalBiography: {
-    marginTop: 8,
-  },
-  modalBiographyText: {
-    color: '#fff',
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  movieCastSection: {
-    marginBottom: 16,
-    paddingLeft: 0,
-  },
-  additionalInfo: {
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 6,
-  },
-  sectionText: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 16,
-    lineHeight: 24,
-    marginBottom: 16,
-  },
-  metadataRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  metadataLabel: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 15,
-    fontWeight: '600',
-    width: 70,
-  },
-  metadataValue: {
-    color: '#fff',
-    fontSize: 15,
-    flex: 1,
+    marginTop: 4,
   },
   movieInfoContainer: {
     padding: 16,
@@ -3122,7 +3005,7 @@ const styles = StyleSheet.create({
   seasonSelectorTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#fff',
+    color: colors.text,
     marginBottom: 12,
     paddingHorizontal: 16,
   },
@@ -3154,12 +3037,12 @@ const styles = StyleSheet.create({
     width: 100,
     height: 150,
     borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: colors.transparentLight,
     justifyContent: 'center',
     alignItems: 'center',
   },
   seasonPosterPlaceholderText: {
-    color: '#fff',
+    color: colors.text,
     fontSize: 32,
     fontWeight: 'bold',
   },
@@ -3175,16 +3058,16 @@ const styles = StyleSheet.create({
     // No background color needed since we have the indicator
   },
   seasonButtonText: {
-    color: 'rgba(255,255,255,0.7)',
+    color: colors.textMuted,
     fontSize: 14,
     fontWeight: '500',
   },
   selectedSeasonButtonText: {
-    color: '#fff',
+    color: colors.text,
     fontWeight: '600',
   },
   episodeOverview: {
-    color: 'rgba(255,255,255,0.8)',
+    color: colors.textDark,
     fontSize: 14,
     lineHeight: 20,
     marginBottom: 16,
@@ -3194,12 +3077,12 @@ const styles = StyleSheet.create({
     height: height * 0.40,
     marginBottom: 0,
     position: 'relative',
-    backgroundColor: '#000',
+    backgroundColor: colors.black,
   },
   streamsHeroBackground: {
     width: '100%',
     height: '100%',
-    backgroundColor: '#000',
+    backgroundColor: colors.black,
   },
   streamsHeroGradient: {
     flex: 1,
@@ -3220,13 +3103,13 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   streamsHeroTitle: {
-    color: '#fff',
+    color: colors.text,
     fontSize: 24,
     fontWeight: 'bold',
     marginBottom: 4,
   },
   streamsHeroOverview: {
-    color: 'rgba(255,255,255,0.8)',
+    color: colors.textDark,
     fontSize: 14,
     lineHeight: 18,
     marginBottom: 4,
@@ -3238,7 +3121,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   streamsHeroReleased: {
-    color: 'rgba(255,255,255,0.6)',
+    color: colors.textMuted,
     fontSize: 14,
   },
   streamsHeroRating: {
@@ -3246,7 +3129,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   streamsHeroRatingText: {
-    color: '#FFD700',
+    color: '#FFD700', // Keeping gold color for ratings
     fontSize: 14,
     marginLeft: 6,
     fontWeight: '600',
@@ -3257,7 +3140,7 @@ const styles = StyleSheet.create({
   skeletonTitle: {
     height: 24,
     width: '40%',
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: colors.transparentLight,
     borderRadius: 4,
     marginBottom: 16,
   },
@@ -3307,12 +3190,12 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 12,
     borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: colors.transparentLight,
     justifyContent: 'center',
     alignItems: 'center',
   },
   saveButtonText: {
-    color: '#fff',
+    color: colors.text,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -3326,20 +3209,20 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
   },
   filterChip: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: colors.transparentLight,
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
     marginRight: 8,
     borderWidth: 1,
-    borderColor: 'transparent',
+    borderColor: colors.transparent,
   },
   filterChipSelected: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: colors.transparentLight,
     borderColor: colors.primary,
   },
   filterChipText: {
-    color: '#fff',
+    color: colors.text,
     fontWeight: '500',
   },
   filterChipTextSelected: {
@@ -3348,14 +3231,14 @@ const styles = StyleSheet.create({
   },
   sourceText: {
     fontSize: 12,
-    color: 'rgba(255,255,255,0.5)',
+    color: colors.textMuted,
     fontStyle: 'italic',
   },
   episodeStreamsContainer: {
     padding: 12,
     paddingTop: 0,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.1)',
+    borderTopColor: colors.transparentLight,
   },
   episodeStreamGroup: {
     marginBottom: 12,
@@ -3363,13 +3246,13 @@ const styles = StyleSheet.create({
   episodeStreamAddonName: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#fff',
+    color: colors.text,
     marginBottom: 8,
     marginTop: 8,
   },
   showMoreStreamsButton: {
     padding: 8,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: colors.transparentLight,
     borderRadius: 4,
     alignItems: 'center',
     marginTop: 8,
@@ -3385,9 +3268,194 @@ const styles = StyleSheet.create({
     padding: 32,
   },
   noEpisodesText: {
-    color: '#666',
+    color: colors.textMuted,
     fontSize: 16,
     marginTop: 8,
+  },
+  metadataRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  metadataLabel: {
+    color: colors.mediumEmphasis,
+    fontSize: 15,
+    fontWeight: '600',
+    width: 90,
+  },
+  metadataValue: {
+    color: colors.highEmphasis,
+    fontSize: 15,
+    flex: 1,
+  },
+  sectionTitle: {
+    color: colors.highEmphasis,
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 12,
+    marginTop: 8,
+    paddingHorizontal: 16,
+  },
+  sectionText: {
+    color: colors.mediumEmphasis,
+    fontSize: 16,
+    lineHeight: 24,
+    marginBottom: 16,
+  },
+  modalContainer: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
+    zIndex: 1000,
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'transparent',
+  },
+  modalOverlayTouchable: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  modalContent: {
+    backgroundColor: colors.elevation1,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '90%',
+    width: '100%',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  modalDragHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  modalCloseButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 1,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.elevation2,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalScroll: {
+    maxHeight: '90%',
+  },
+  modalHeader: {
+    padding: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  modalImageContainer: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    overflow: 'hidden',
+    marginRight: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  modalImage: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+  },
+  modalHeaderInfo: {
+    flex: 1,
+  },
+  modalName: {
+    color: colors.highEmphasis,
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  modalCharacter: {
+    color: colors.mediumEmphasis,
+    fontSize: 16,
+  },
+  modalLoading: {
+    padding: 24,
+    alignItems: 'center',
+  },
+  modalDetails: {
+    padding: 24,
+    paddingTop: 0,
+  },
+  modalDetailRow: {
+    marginBottom: 16,
+  },
+  modalDetailLabel: {
+    color: colors.mediumEmphasis,
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  modalDetailText: {
+    color: colors.highEmphasis,
+    fontSize: 16,
+  },
+  modalBiography: {
+    marginTop: 8,
+  },
+  modalBiographyText: {
+    color: colors.mediumEmphasis,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  movieCastSection: {
+    marginBottom: 20,
+    marginTop: 0,
+    paddingLeft: 0,
+  },
+  additionalInfo: {
+    marginBottom: 24,
+  },
+  streamsContent: {
+    flex: 1,
+  },
+  backButton: {
+    position: 'absolute',
+    top: Platform.OS === 'android' ? 35 : 45,
+    left: 16,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  streamsBackButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 14,
+    paddingTop: Platform.OS === 'android' ? 35 : 45,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    zIndex: 1,
+  },
+  streamsBackText: {
+    color: colors.highEmphasis,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  streamsMainContent: {
+    flex: 1,
+    backgroundColor: colors.darkBackground,
+    paddingTop: 20,
+  },
+  episodesList: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
   },
 });
 
