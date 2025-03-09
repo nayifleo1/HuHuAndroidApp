@@ -25,7 +25,7 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
     fun initialize() {
         val torrentOptions = TorrentOptions.Builder()
             .saveLocation(context.getExternalFilesDir(null))
-            .removeFilesAfterStop(true)
+            .removeFilesAfterStop(false)
             .build()
 
         torrentStream = TorrentStream.init(torrentOptions)
@@ -76,6 +76,7 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
     }
 
     override fun onStreamProgress(torrent: Torrent, status: StreamStatus) {
+        Log.d(TAG, "Stream progress - Buffer: ${status.bufferProgress}%, Speed: ${status.downloadSpeed}, Seeds: ${status.seeds}")
         val progress = mapOf(
             "bufferProgress" to status.bufferProgress,
             "downloadSpeed" to status.downloadSpeed,

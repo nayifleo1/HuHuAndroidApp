@@ -3,6 +3,7 @@ package com.huhu.app.videoplayer
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.react.modules.core.RCTNativeAppEventEmitter
+import java.io.File
 
 class TorrentStreamModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
     private val torrentService: TorrentStreamingService = TorrentStreamingService(reactContext)
@@ -64,5 +65,15 @@ class TorrentStreamModule(reactContext: ReactApplicationContext) : ReactContextB
     @ReactMethod
     fun stopStream() {
         torrentService.stopStream()
+    }
+
+    @ReactMethod
+    fun fileExists(path: String, promise: Promise) {
+        try {
+            val file = File(path)
+            promise.resolve(file.exists() && file.isFile)
+        } catch (e: Exception) {
+            promise.reject("FILE_ERROR", "Failed to check if file exists: ${e.message}", e)
+        }
     }
 } 

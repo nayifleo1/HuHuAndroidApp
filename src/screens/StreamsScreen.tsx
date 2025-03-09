@@ -273,6 +273,9 @@ export const StreamsScreen = () => {
   const [torrentProgress, setTorrentProgress] = React.useState<{[key: string]: TorrentProgress}>({});
   const [activeTorrent, setActiveTorrent] = React.useState<string | null>(null);
 
+  // Add new state to track video player status
+  const [isVideoPlaying, setIsVideoPlaying] = React.useState(false);
+
   React.useEffect(() => {
     if (type === 'series' && episodeId) {
       setSelectedEpisode(episodeId);
@@ -362,9 +365,11 @@ export const StreamsScreen = () => {
                 {
                   text: 'Stop and Switch',
                   style: 'destructive',
-                  onPress: () => {
+                  onPress: async () => {
                     console.log('Stopping current torrent and starting new one');
-                    torrentService.stopStream();
+                    await torrentService.stopStreamAndWait();
+                    setActiveTorrent(null);
+                    setTorrentProgress({});
                     startTorrentStream(stream);
                   }
                 }
@@ -400,17 +405,43 @@ export const StreamsScreen = () => {
     }
   }, [metadata, type, currentEpisode, activeTorrent]);
 
-  // Add function to handle torrent streaming
+  // Clean up torrent when video player closes or component unmounts
+  React.useEffect(() => {
+    return () => {
+      console.log('[StreamsScreen] Cleanup effect triggered, stopping torrent');
+      if (activeTorrent) {
+        torrentService.stopStreamAndWait().catch(error => {
+          console.error('[StreamsScreen] Error during cleanup:', error);
+        });
+        setActiveTorrent(null);
+        setTorrentProgress({});
+      }
+    };
+  }, [activeTorrent]);
+
   const startTorrentStream = useCallback(async (stream: Stream) => {
     if (!stream.url) return;
 
     try {
-      console.log('Starting torrent stream with URL:', stream.url);
+      console.log('[StreamsScreen] Starting torrent stream with URL:', stream.url);
+      
+      // Make sure any existing stream is fully stopped
+      if (activeTorrent && activeTorrent !== stream.url) {
+        await torrentService.stopStreamAndWait();
+        setActiveTorrent(null);
+        setTorrentProgress({});
+      }
+      
       setActiveTorrent(stream.url);
+      setIsVideoPlaying(false);
       
       const videoPath = await torrentService.startStream(stream.url, {
         onProgress: (progress) => {
-          console.log('Torrent progress:', progress);
+          console.log('[StreamsScreen] Torrent progress update:', {
+            url: stream.url,
+            progress,
+            currentTorrentProgress: torrentProgress[stream.url!]
+          });
           setTorrentProgress(prev => ({
             ...prev,
             [stream.url!]: progress
@@ -418,7 +449,7 @@ export const StreamsScreen = () => {
 
           // If buffering is complete, start playback
           if (progress.bufferProgress >= 100) {
-            console.log('Torrent buffering complete, starting playback');
+            console.log('[StreamsScreen] Torrent buffering complete, starting playback');
             setActiveTorrent(null);
             setTorrentProgress(prev => {
               const newProgress = { ...prev };
@@ -429,42 +460,49 @@ export const StreamsScreen = () => {
         }
       });
       
-      console.log('Got video path:', videoPath);
+      console.log('[StreamsScreen] Got video path:', videoPath);
       
       // Once we have the video file path, play it using VideoPlayerService
-      await VideoPlayerService.playVideo(`file://${videoPath}`, {
-        title: metadata?.name || '',
-        episodeTitle: type === 'series' ? currentEpisode?.name : undefined,
-        episodeNumber: type === 'series' ? 
-          `S${currentEpisode?.season_number.toString().padStart(2, '0')}E${currentEpisode?.episode_number.toString().padStart(2, '0')}` 
-          : undefined,
-        releaseDate: metadata?.released
-      });
+      setIsVideoPlaying(true);
+      
+      try {
+        await VideoPlayerService.playVideo(`file://${videoPath}`, {
+          title: metadata?.name || '',
+          episodeTitle: type === 'series' ? currentEpisode?.name : undefined,
+          episodeNumber: type === 'series' ? 
+            `S${currentEpisode?.season_number.toString().padStart(2, '0')}E${currentEpisode?.episode_number.toString().padStart(2, '0')}` 
+            : undefined,
+          releaseDate: metadata?.released
+        });
+        
+        // Video player has closed normally
+        console.log('[StreamsScreen] Video playback ended, cleaning up');
+        setIsVideoPlaying(false);
+        
+        // Clean up torrent after video player closes
+        await torrentService.stopStreamAndWait();
+        setActiveTorrent(null);
+        setTorrentProgress({});
+        
+      } catch (playerError) {
+        console.error('[StreamsScreen] Video player error:', playerError);
+        setIsVideoPlaying(false);
+        throw playerError;
+      }
+      
     } catch (error) {
-      console.error('Torrent error:', error);
+      console.error('[StreamsScreen] Torrent error:', error);
+      // Clean up on error
+      setIsVideoPlaying(false);
+      await torrentService.stopStreamAndWait();
       setActiveTorrent(null);
-      setTorrentProgress(prev => {
-        const newProgress = { ...prev };
-        if (stream.url) {
-          delete newProgress[stream.url];
-        }
-        return newProgress;
-      });
+      setTorrentProgress({});
       Alert.alert(
         'Download Error',
-        error instanceof Error ? error.message : 'An error occurred while downloading the video'
+        error instanceof Error ? error.message : 'An error occurred while playing the video'
       );
     }
-  }, [metadata, type, currentEpisode]);
-
-  // Clean up torrent on unmount
-  React.useEffect(() => {
-    return () => {
-      if (activeTorrent) {
-        torrentService.stopStream();
-      }
-    };
-  }, [activeTorrent]);
+  }, [metadata, type, currentEpisode, torrentProgress, activeTorrent]);
 
   const filterItems = useMemo(() => {
     const installedAddons = stremioService.getInstalledAddons();
