@@ -417,7 +417,7 @@ export const StreamsScreen = () => {
         setTorrentProgress({});
       }
     };
-  }, [activeTorrent]);
+  }, []);
 
   const startTorrentStream = useCallback(async (stream: Stream) => {
     if (!stream.url) return;

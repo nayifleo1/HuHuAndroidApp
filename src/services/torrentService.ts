@@ -69,7 +69,12 @@ class TorrentService {
         const exists = await TorrentStreamModule.fileExists(cachedPath);
         if (exists) {
           console.log('[TorrentService] Using cached torrent file');
-          // Even for cached files, set up the progress listener to maintain consistent state
+          
+          // Even for cached files, we need to start the torrent stream to maintain the session
+          // First stop any existing stream and wait a moment for cleanup
+          await this.stopStreamAndWait();
+
+          // Setup progress listener if callback provided
           if (events?.onProgress) {
             console.log('[TorrentService] Setting up progress listener for cached file');
             this.progressListener = this.eventEmitter.addListener(
@@ -82,6 +87,9 @@ class TorrentService {
               }
             );
           }
+
+          // Start the stream in cached mode
+          await TorrentStreamModule.startStream(magnetUri);
           return cachedPath;
         } else {
           console.log('[TorrentService] Cached file not found, removing from cache');

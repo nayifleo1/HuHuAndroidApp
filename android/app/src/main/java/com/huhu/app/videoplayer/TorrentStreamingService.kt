@@ -17,6 +17,7 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
     private var currentPromise: Promise? = null
     private var progressCallback: Callback? = null
     private var currentTorrent: Torrent? = null
+    private var isCachedFile: Boolean = false
 
     companion object {
         private const val TAG = "TorrentStreamingService"
@@ -26,6 +27,9 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
         val torrentOptions = TorrentOptions.Builder()
             .saveLocation(context.getExternalFilesDir(null))
             .removeFilesAfterStop(false)
+            .maxDownloadSpeed(0) // No speed limit
+            .maxUploadSpeed(0) // No speed limit
+            .maxConnections(200) // Increase max connections
             .build()
 
         torrentStream = TorrentStream.init(torrentOptions)
@@ -37,7 +41,26 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
         progressCallback = callback
         
         try {
-            torrentStream?.startStream(magnetUri)
+            // Check if the file already exists in the save location
+            val infoHash = magnetUri.substringAfter("btih:").substringBefore("&")
+            val saveLocation = context.getExternalFilesDir(null)
+            val files = saveLocation?.listFiles { file -> 
+                file.isFile && file.name.contains(infoHash, ignoreCase = true)
+            }
+            
+            isCachedFile = files?.isNotEmpty() == true
+            
+            if (isCachedFile) {
+                Log.d(TAG, "Found cached file for torrent")
+                // Even for cached files, start the stream to maintain the session
+                torrentStream?.startStream(magnetUri)
+                // But immediately resolve with the cached file path
+                files?.firstOrNull()?.let { file ->
+                    promise.resolve(file.absolutePath)
+                }
+            } else {
+                torrentStream?.startStream(magnetUri)
+            }
         } catch (e: Exception) {
             promise.reject("TORRENT_ERROR", "Failed to start torrent stream", e)
         }
@@ -48,6 +71,7 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
         currentTorrent = null
         currentPromise = null
         progressCallback = null
+        isCachedFile = false
     }
 
     override fun onStreamPrepared(torrent: Torrent) {
@@ -61,17 +85,21 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
 
     override fun onStreamError(torrent: Torrent, e: Exception) {
         Log.e(TAG, "Stream error", e)
-        currentPromise?.reject("TORRENT_ERROR", "Torrent streaming error", e)
+        if (!isCachedFile) {
+            currentPromise?.reject("TORRENT_ERROR", "Torrent streaming error", e)
+        }
         currentTorrent = null
     }
 
     override fun onStreamReady(torrent: Torrent) {
         Log.d(TAG, "Stream ready")
-        val videoFile = torrent.videoFile
-        if (videoFile != null && videoFile.exists()) {
-            currentPromise?.resolve(videoFile.absolutePath)
-        } else {
-            currentPromise?.reject("TORRENT_ERROR", "No video file found in torrent")
+        if (!isCachedFile) {
+            val videoFile = torrent.videoFile
+            if (videoFile != null && videoFile.exists()) {
+                currentPromise?.resolve(videoFile.absolutePath)
+            } else {
+                currentPromise?.reject("TORRENT_ERROR", "No video file found in torrent")
+            }
         }
     }
 
@@ -89,5 +117,6 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
     override fun onStreamStopped() {
         Log.d(TAG, "Stream stopped")
         currentTorrent = null
+        isCachedFile = false
     }
 } 
