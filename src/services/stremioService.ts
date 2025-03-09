@@ -117,11 +117,8 @@ class StremioService {
   private installedAddons: Map<string, Manifest> = new Map();
   private readonly STORAGE_KEY = 'stremio-addons';
   private readonly DEFAULT_ADDONS = [
-    'https://v3-cinemeta.strem.io/manifest.json',
-    'https://torrentio.strem.fun/manifest.json',
-    'https://1337x-addon.up.railway.app/manifest.json',
-    'https://v3-community-movies.strem.io/manifest.json',
-    'https://v3-community-series.strem.io/manifest.json'
+    'https://v3-cinemeta.strem.io/manifest.json'
+    
   ];
   private readonly MAX_CONCURRENT_REQUESTS = 3;
   private readonly DEFAULT_PAGE_SIZE = 50;
@@ -702,4 +699,4 @@ class StremioService {
 }
 
 export const stremioService = StremioService.getInstance();
-export default stremioService; 
+export default stremioService;

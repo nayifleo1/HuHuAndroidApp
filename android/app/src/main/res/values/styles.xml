@@ -1,9 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
 
     <!-- Base application theme. -->
     <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
         <!-- Customize your theme here. -->
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowTranslucentNavigation">true</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:selectableItemBackground">@android:color/transparent</item>
+        <item name="android:selectableItemBackgroundBorderless">@android:color/transparent</item>
+        <item name="android:colorControlHighlight">@android:color/transparent</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+
+    <!-- Bottom Sheet Dialog Theme -->
+    <style name="BottomSheetDialogTheme" parent="Theme.Design.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/BottomSheetStyle</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowSoftInputMode">adjustResize</item>
+        <item name="behavior_peekHeight">0dp</item>
+        <item name="behavior_fitToContents">true</item>
+        <item name="behavior_skipCollapsed">true</item>
+    </style>
+
+    <style name="BottomSheetStyle" parent="Widget.Design.BottomSheet.Modal">
+        <item name="android:background">@android:color/transparent</item>
+        <item name="behavior_peekHeight">0dp</item>
+        <item name="behavior_fitToContents">true</item>
+        <item name="behavior_skipCollapsed">true</item>
+        <item name="behavior_expandedOffset">0dp</item>
     </style>
 
 </resources>

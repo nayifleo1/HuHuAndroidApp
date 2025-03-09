@@ -9,4 +9,5 @@ export { default as CatalogScreen } from './CatalogScreen';
 export { default as DiscoverScreen } from './DiscoverScreen';
 export { default as LibraryScreen } from './LibraryScreen';
 export { default as ShowRatingsScreen } from './ShowRatingsScreen';
-export { default as CatalogSettingsScreen } from './CatalogSettingsScreen'; 
+export { default as CatalogSettingsScreen } from './CatalogSettingsScreen';
+export { default as StreamsScreen } from './StreamsScreen'; 

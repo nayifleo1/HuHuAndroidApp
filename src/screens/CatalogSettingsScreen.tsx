@@ -54,33 +54,42 @@ const CatalogSettingsScreen = () => {
           const uniqueCatalogs = new Map<string, CatalogSetting>();
           
           addon.catalogs.forEach(catalog => {
+            // Create a unique key that includes addon id, type, and catalog id
             const settingKey = `${addon.id}:${catalog.type}:${catalog.id}`;
-            const uniqueKey = `${catalog.type}:${catalog.id}`;
             
             // Format catalog name
             let displayName = catalog.name;
-            if (addon.id === 'com.linvo.cinemeta') {
-              const contentType = catalog.type === 'movie' ? 'Movies' : 'TV Shows';
-              // Remove duplicate words and clean up the name
-              displayName = catalog.name
-                .split(' ')
-                .filter((word, index, arr) => arr.indexOf(word) === index) // Remove duplicate words
-                .join(' ');
-              if (!displayName.includes(contentType)) {
-                displayName = `${displayName} ${contentType}`;
+            
+            // Clean up the name and ensure type is included
+            const contentType = catalog.type === 'movie' ? 'Movies' : 'TV Shows';
+            
+            // Remove duplicate words (case-insensitive)
+            const words = displayName.split(' ');
+            const uniqueWords = [];
+            const seenWords = new Set();
+            
+            for (const word of words) {
+              const lowerWord = word.toLowerCase();
+              if (!seenWords.has(lowerWord)) {
+                uniqueWords.push(word); // Keep original case
+                seenWords.add(lowerWord);
               }
             }
-
-            // Only add if we haven't seen this catalog type and id combination before
-            if (!uniqueCatalogs.has(uniqueKey)) {
-              uniqueCatalogs.set(uniqueKey, {
-                addonId: addon.id,
-                catalogId: catalog.id,
-                type: catalog.type,
-                name: `${addon.name} - ${displayName}`,
-                enabled: savedCatalogs[settingKey] ?? true // Enable by default
-              });
+            displayName = uniqueWords.join(' ');
+            
+            // Add content type if not present (case-insensitive)
+            if (!displayName.toLowerCase().includes(contentType.toLowerCase())) {
+              displayName = `${displayName} ${contentType}`;
             }
+
+            // Create unique catalog setting
+            uniqueCatalogs.set(settingKey, {
+              addonId: addon.id,
+              catalogId: catalog.id,
+              type: catalog.type,
+              name: `${addon.name} - ${displayName}`,
+              enabled: savedCatalogs[settingKey] ?? true // Enable by default
+            });
           });
           
           // Add unique catalogs to the available catalogs array
@@ -88,7 +97,18 @@ const CatalogSettingsScreen = () => {
         }
       });
       
-      setSettings(availableCatalogs);
+      // Sort catalogs by addon name and then by catalog name
+      const sortedCatalogs = availableCatalogs.sort((a, b) => {
+        const [addonNameA] = a.name.split(' - ');
+        const [addonNameB] = b.name.split(' - ');
+        
+        if (addonNameA !== addonNameB) {
+          return addonNameA.localeCompare(addonNameB);
+        }
+        return a.name.localeCompare(b.name);
+      });
+      
+      setSettings(sortedCatalogs);
     } catch (error) {
       console.error('Failed to load catalog settings:', error);
     } finally {
@@ -113,9 +133,15 @@ const CatalogSettingsScreen = () => {
   };
 
   // Toggle individual catalog
-  const toggleCatalog = (index: number) => {
-    const newSettings = [...settings];
-    newSettings[index].enabled = !newSettings[index].enabled;
+  const toggleCatalog = (setting: CatalogSetting) => {
+    const newSettings = settings.map(s => {
+      if (s.addonId === setting.addonId && 
+          s.type === setting.type && 
+          s.catalogId === setting.catalogId) {
+        return { ...s, enabled: !s.enabled };
+      }
+      return s;
+    });
     setSettings(newSettings);
     saveSettings(newSettings);
   };
@@ -163,19 +189,14 @@ const CatalogSettingsScreen = () => {
             <Text style={styles.addonTitle}>
               {addonCatalogs[0].name.split(' - ')[0]}
             </Text>
-            {addonCatalogs.map((setting, index) => (
+            {addonCatalogs.map((setting) => (
               <View key={`${setting.addonId}:${setting.type}:${setting.catalogId}`} style={styles.catalogItem}>
                 <Text style={styles.catalogName}>
                   {setting.name.split(' - ')[1]}
                 </Text>
                 <Switch
                   value={setting.enabled}
-                  onValueChange={() => toggleCatalog(
-                    settings.findIndex(s => 
-                      s.addonId === setting.addonId && 
-                      s.catalogId === setting.catalogId
-                    )
-                  )}
+                  onValueChange={() => toggleCatalog(setting)}
                   trackColor={{ false: colors.mediumGray, true: colors.primary }}
                 />
               </View>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, memo, Suspense } from 'react';
 import {
   View,
   Text,
@@ -59,6 +59,149 @@ const getRatingColor = (rating: number): string => {
   if (rating >= 6.0) return '#E74C3C'; // Bad
   return '#633974'; // Garbage
 };
+
+// Memoized components
+const RatingCell = memo(({ episode, ratingSource, getTVMazeRating, isCurrentSeason }: {
+  episode: TMDBEpisode;
+  ratingSource: RatingSource;
+  getTVMazeRating: (seasonNumber: number, episodeNumber: number) => number | null;
+  isCurrentSeason: (episode: TMDBEpisode) => boolean;
+}) => {
+  const getRatingForSource = useCallback((episode: TMDBEpisode): number | null => {
+    switch (ratingSource) {
+      case 'imdb':
+        return episode.imdb_rating || null;
+      case 'tmdb':
+        return episode.vote_average || null;
+      case 'tvmaze':
+        return getTVMazeRating(episode.season_number, episode.episode_number);
+      default:
+        return null;
+    }
+  }, [ratingSource, getTVMazeRating]);
+
+  const isRatingPotentiallyInaccurate = useCallback((episode: TMDBEpisode): boolean => {
+    const rating = getRatingForSource(episode);
+    if (!rating) return false;
+
+    if (ratingSource === 'tmdb' && episode.imdb_rating) {
+      const difference = Math.abs(rating - episode.imdb_rating);
+      return difference >= 2;
+    }
+
+    return false;
+  }, [getRatingForSource, ratingSource]);
+
+  const rating = getRatingForSource(episode);
+  const isInaccurate = isRatingPotentiallyInaccurate(episode);
+  const isCurrent = isCurrentSeason(episode);
+
+  if (!rating) {
+    if (!episode.air_date || new Date(episode.air_date) > new Date()) {
+      return (
+        <View style={[styles.ratingCell, { backgroundColor: colors.darkGray }]}>
+          <MaterialIcons name="schedule" size={16} color={colors.lightGray} />
+        </View>
+      );
+    }
+    return (
+      <View style={[styles.ratingCell, { backgroundColor: colors.darkGray }]}>
+        <Text style={[styles.ratingText, { color: colors.lightGray }]}>—</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.ratingCellContainer}>
+      <View style={[
+        styles.ratingCell, 
+        { 
+          backgroundColor: getRatingColor(rating),
+          opacity: isCurrent ? 0.7 : 1 
+        }
+      ]}>
+        <Text style={styles.ratingText}>{rating.toFixed(1)}</Text>
+      </View>
+      {(isInaccurate || isCurrent) && (
+        <MaterialIcons 
+          name={isCurrent ? "schedule" : "warning"}
+          size={12} 
+          color={isCurrent ? colors.primary : colors.warning}
+          style={styles.warningIcon}
+        />
+      )}
+    </View>
+  );
+});
+
+const RatingSourceToggle = memo(({ ratingSource, setRatingSource }: {
+  ratingSource: RatingSource;
+  setRatingSource: (source: RatingSource) => void;
+}) => (
+  <View style={styles.ratingSourceContainer}>
+    <Text style={styles.ratingSourceTitle}>Rating Source:</Text>
+    <View style={styles.ratingSourceButtons}>
+      <TouchableOpacity
+        style={[
+          styles.sourceButton,
+          ratingSource === 'imdb' && styles.sourceButtonActive
+        ]}
+        onPress={() => setRatingSource('imdb')}
+      >
+        <Text style={[
+          styles.sourceButtonText,
+          ratingSource === 'imdb' && styles.sourceButtonTextActive
+        ]}>IMDb</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[
+          styles.sourceButton,
+          ratingSource === 'tmdb' && styles.sourceButtonActive
+        ]}
+        onPress={() => setRatingSource('tmdb')}
+      >
+        <Text style={[
+          styles.sourceButtonText,
+          ratingSource === 'tmdb' && styles.sourceButtonTextActive
+        ]}>TMDB</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[
+          styles.sourceButton,
+          ratingSource === 'tvmaze' && styles.sourceButtonActive
+        ]}
+        onPress={() => setRatingSource('tvmaze')}
+      >
+        <Text style={[
+          styles.sourceButtonText,
+          ratingSource === 'tvmaze' && styles.sourceButtonTextActive
+        ]}>TVMaze</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+));
+
+const ShowInfo = memo(({ show }: { show: Show | null }) => (
+  <View style={styles.showInfo}>
+    <FastImage
+      source={{ uri: `https://image.tmdb.org/t/p/w500${show?.poster_path}` }}
+      style={styles.poster}
+      resizeMode={FastImage.resizeMode.cover}
+    />
+    <View style={styles.showDetails}>
+      <Text style={styles.showTitle}>{show?.name}</Text>
+      <Text style={styles.showYear}>
+        {show?.first_air_date ? `${new Date(show.first_air_date).getFullYear()} - ${show.last_air_date ? new Date(show.last_air_date).getFullYear() : 'Present'}` : ''}
+      </Text>
+      <View style={styles.episodeCountContainer}>
+        <MaterialIcons name="tv" size={16} color={colors.primary} />
+        <Text style={styles.episodeCount}>
+          {show?.number_of_seasons} Seasons • {show?.number_of_episodes} Episodes
+        </Text>
+      </View>
+    </View>
+  </View>
+));
 
 const ShowRatingsScreen = ({ route }: Props) => {
   const { showId } = route.params;
@@ -137,7 +280,7 @@ const ShowRatingsScreen = ({ route }: Props) => {
     }
   };
 
-  const onScroll = (event: any) => {
+  const onScroll = useCallback((event: any) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const isCloseToRight = (contentOffset.x + layoutMeasurement.width) >= (contentSize.width * 0.8);
     
@@ -146,11 +289,11 @@ const ShowRatingsScreen = ({ route }: Props) => {
       if (visibleSeasonRange.end < maxSeasons) {
         setVisibleSeasonRange(prev => ({
           start: prev.end,
-          end: Math.min(prev.end + 8, maxSeasons) // Load 8 seasons at a time
+          end: Math.min(prev.end + 8, maxSeasons)
         }));
       }
     }
-  };
+  }, [show, loadingSeasons, visibleSeasonRange.end]);
 
   useEffect(() => {
     const fetchShowData = async () => {
@@ -184,155 +327,30 @@ const ShowRatingsScreen = ({ route }: Props) => {
     loadMoreSeasons();
   }, [visibleSeasonRange]);
 
-  const isCurrentSeason = (episode: TMDBEpisode): boolean => {
-    if (!seasons.length || !episode.air_date) return false;
-    
-    // Get the highest season number
-    const latestSeasonNumber = Math.max(...seasons.map(s => s.season_number));
-    
-    // Check if this episode is from the latest season
-    if (episode.season_number !== latestSeasonNumber) return false;
-    
-    // Get the current date and the episode air date
-    const now = new Date();
-    const airDate = new Date(episode.air_date);
-    
-    // Calculate the difference in months
-    const monthsDiff = (now.getFullYear() - airDate.getFullYear()) * 12 + 
-                      (now.getMonth() - airDate.getMonth());
-    
-    // Consider it current if it aired in the last 6 months
-    return monthsDiff <= 6;
-  };
-
-  const getTVMazeRating = (seasonNumber: number, episodeNumber: number): number | null => {
+  const getTVMazeRating = useCallback((seasonNumber: number, episodeNumber: number): number | null => {
     const episode = tvmazeEpisodes.find(
       ep => ep.season === seasonNumber && ep.number === episodeNumber
     );
     return episode?.rating?.average || null;
-  };
+  }, [tvmazeEpisodes]);
 
-  const getRatingForSource = (episode: TMDBEpisode): number | null => {
-    switch (ratingSource) {
-      case 'imdb':
-        return episode.imdb_rating || null;
-      case 'tmdb':
-        return episode.vote_average || null;
-      case 'tvmaze':
-        return getTVMazeRating(episode.season_number, episode.episode_number);
-      default:
-        return null;
-    }
-  };
-
-  const isRatingPotentiallyInaccurate = (episode: TMDBEpisode): boolean => {
-    const rating = getRatingForSource(episode);
-    if (!rating) return false;
-
-    // For TMDB ratings, consider them potentially inaccurate if they deviate significantly from IMDb
-    if (ratingSource === 'tmdb' && episode.imdb_rating) {
-      const difference = Math.abs(rating - episode.imdb_rating);
-      return difference >= 2;
-    }
-
-    return false;
-  };
-
-  const renderRatingCell = (episode: TMDBEpisode) => {
-    const rating = getRatingForSource(episode);
-    const isInaccurate = isRatingPotentiallyInaccurate(episode);
-    const isCurrent = isCurrentSeason(episode);
+  const isCurrentSeason = useCallback((episode: TMDBEpisode): boolean => {
+    if (!seasons.length || !episode.air_date) return false;
     
-    if (!rating) {
-      // Check if the episode has aired
-      if (!episode.air_date || new Date(episode.air_date) > new Date()) {
-        return (
-          <View style={[styles.ratingCell, { backgroundColor: colors.darkGray }]}>
-            <MaterialIcons name="schedule" size={16} color={colors.lightGray} />
-          </View>
-        );
-      }
-      // If it has aired but no rating, show dash
-      return (
-        <View style={[styles.ratingCell, { backgroundColor: colors.darkGray }]}>
-          <Text style={[styles.ratingText, { color: colors.lightGray }]}>—</Text>
-        </View>
-      );
-    }
-
-    return (
-      <View style={styles.ratingCellContainer}>
-        <View style={[
-          styles.ratingCell, 
-          { 
-            backgroundColor: getRatingColor(rating),
-            opacity: isCurrent ? 0.7 : 1 
-          }
-        ]}>
-          <Text style={styles.ratingText}>{rating.toFixed(1)}</Text>
-        </View>
-        {(isInaccurate || isCurrent) && (
-          <MaterialIcons 
-            name={isCurrent ? "schedule" : "warning"}
-            size={12} 
-            color={isCurrent ? colors.primary : colors.warning}
-            style={styles.warningIcon}
-          />
-        )}
-      </View>
-    );
-  };
-
-  const renderRatingSourceToggle = () => (
-    <View style={styles.ratingSourceContainer}>
-      <Text style={styles.ratingSourceTitle}>Rating Source:</Text>
-      <View style={styles.ratingSourceButtons}>
-        <TouchableOpacity
-          style={[
-            styles.sourceButton,
-            ratingSource === 'imdb' && styles.sourceButtonActive
-          ]}
-          onPress={() => setRatingSource('imdb')}
-        >
-          <Text style={[
-            styles.sourceButtonText,
-            ratingSource === 'imdb' && styles.sourceButtonTextActive
-          ]}>IMDb</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.sourceButton,
-            ratingSource === 'tmdb' && styles.sourceButtonActive
-          ]}
-          onPress={() => setRatingSource('tmdb')}
-        >
-          <Text style={[
-            styles.sourceButtonText,
-            ratingSource === 'tmdb' && styles.sourceButtonTextActive
-          ]}>TMDB</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.sourceButton,
-            ratingSource === 'tvmaze' && styles.sourceButtonActive
-          ]}
-          onPress={() => setRatingSource('tvmaze')}
-        >
-          <Text style={[
-            styles.sourceButtonText,
-            ratingSource === 'tvmaze' && styles.sourceButtonTextActive
-          ]}>TVMaze</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
+    const latestSeasonNumber = Math.max(...seasons.map(s => s.season_number));
+    if (episode.season_number !== latestSeasonNumber) return false;
+    
+    const now = new Date();
+    const airDate = new Date(episode.air_date);
+    const monthsDiff = (now.getFullYear() - airDate.getFullYear()) * 12 + 
+                      (now.getMonth() - airDate.getMonth());
+    
+    return monthsDiff <= 6;
+  }, [seasons]);
 
   if (loading) {
     return (
-      <Animated.View 
-        entering={FadeIn.duration(300)}
-        style={[styles.container, { backgroundColor: colors.black }]}
-      >
+      <View style={[styles.container, { backgroundColor: colors.black }]}>
         <StatusBar
           translucent
           backgroundColor="transparent"
@@ -343,176 +361,166 @@ const ShowRatingsScreen = ({ route }: Props) => {
             <ActivityIndicator size="large" color={colors.primary} />
           </View>
         </SafeAreaView>
-      </Animated.View>
+      </View>
     );
   }
 
   return (
-    <Animated.View 
-      entering={SlideInRight.springify().damping(15)}
-      style={[styles.container, { backgroundColor: colors.black }]}
-    >
+    <View style={[styles.container, { backgroundColor: colors.black }]}>
       <StatusBar
         translucent
         backgroundColor="transparent"
         barStyle="light-content"
       />
       <SafeAreaView style={{ flex: 1 }}>
-        <ScrollView 
-          style={styles.scrollView}
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.content}>
-            {/* Show Info */}
-            <View style={styles.showInfo}>
-              <FastImage
-                source={{ uri: `https://image.tmdb.org/t/p/w500${show?.poster_path}` }}
-                style={styles.poster}
-                resizeMode={FastImage.resizeMode.cover}
-              />
-              <View style={styles.showDetails}>
-                <Text style={styles.showTitle}>{show?.name}</Text>
-                <Text style={styles.showYear}>
-                  {show?.first_air_date ? `${new Date(show.first_air_date).getFullYear()} - ${show.last_air_date ? new Date(show.last_air_date).getFullYear() : 'Present'}` : ''}
-                </Text>
-                <View style={styles.episodeCountContainer}>
-                  <MaterialIcons name="tv" size={16} color={colors.primary} />
-                  <Text style={styles.episodeCount}>
-                    {seasons.length} Seasons • {show?.number_of_episodes} Episodes
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Rating Source Toggle */}
-            <View style={styles.ratingSection}>
-              {renderRatingSourceToggle()}
+        <Suspense fallback={
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={colors.primary} />
+          </View>
+        }>
+          <ScrollView 
+            style={styles.scrollView}
+            showsVerticalScrollIndicator={false}
+            removeClippedSubviews={true}
+          >
+            <View style={styles.content}>
+              <Animated.View 
+                entering={FadeIn.duration(150)}
+                style={styles.showInfoContainer}
+              >
+                <ShowInfo show={show} />
+              </Animated.View>
               
-              {ratingSource === 'tmdb' && (
-                <View style={styles.tmdbDisclaimer}>
-                  <MaterialIcons name="info" size={16} color={colors.primary} />
-                  <Text style={styles.tmdbDisclaimerText}>
-                    TMDB uses a 1-10 rating scale based on user votes, while IMDb uses a weighted average system. Ratings may vary significantly between platforms.
-                  </Text>
-                </View>
-              )}
-              {ratingSource === 'tvmaze' && (
-                <View style={styles.tmdbDisclaimer}>
-                  <MaterialIcons name="info" size={16} color={colors.primary} />
-                  <Text style={styles.tmdbDisclaimerText}>
-                    TVMaze ratings are based on user votes on a 1-10 scale. These ratings tend to have fewer votes than IMDb or TMDB.
-                  </Text>
-                </View>
-              )}
-            </View>
+              <Animated.View 
+                entering={FadeIn.delay(50).duration(150)}
+                style={styles.ratingSourceContainer}
+              >
+                <RatingSourceToggle ratingSource={ratingSource} setRatingSource={setRatingSource} />
+              </Animated.View>
 
-            {/* Legend */}
-            <View style={styles.legend}>
-              <Text style={styles.legendTitle}>Rating Scale</Text>
-              <View style={styles.legendItems}>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendColor, { backgroundColor: '#186A3B' }]} />
-                  <Text style={styles.legendText}>Awesome (9.0+)</Text>
-                </View>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendColor, { backgroundColor: '#28B463' }]} />
-                  <Text style={styles.legendText}>Great (8.0-8.9)</Text>
-                </View>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendColor, { backgroundColor: '#F4D03F' }]} />
-                  <Text style={styles.legendText}>Good (7.5-7.9)</Text>
-                </View>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendColor, { backgroundColor: '#F39C12' }]} />
-                  <Text style={styles.legendText}>Regular (7.0-7.4)</Text>
-                </View>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendColor, { backgroundColor: '#E74C3C' }]} />
-                  <Text style={styles.legendText}>Bad (6.0-6.9)</Text>
-                </View>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendColor, { backgroundColor: '#633974' }]} />
-                  <Text style={styles.legendText}>Garbage ({'<'}6.0)</Text>
-                </View>
-              </View>
-              <View style={styles.warningLegends}>
-                <View style={styles.warningLegend}>
-                  <MaterialIcons name="warning" size={16} color={colors.warning} />
-                  <Text style={styles.warningText}>Rating differs significantly from IMDb</Text>
-                </View>
-                <View style={styles.warningLegend}>
-                  <MaterialIcons name="schedule" size={16} color={colors.primary} />
-                  <Text style={styles.warningText}>Current season (ratings may change)</Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Ratings Grid */}
-            <View style={styles.ratingsGrid}>
-              <View style={styles.gridContainer}>
-                {/* Fixed Episode Column */}
-                <View style={styles.fixedColumn}>
-                  <View style={styles.episodeColumn}>
-                    <Text style={styles.headerText}>Episode</Text>
-                  </View>
-                  {Array.from({ length: Math.max(...seasons.map(s => s.episodes.length)) }).map((_, episodeIndex) => (
-                    <View key={`e${episodeIndex + 1}`} style={styles.episodeCell}>
-                      <Text style={styles.episodeText}>E{episodeIndex + 1}</Text>
+              <Animated.View 
+                entering={FadeIn.delay(100).duration(150)}
+                style={styles.legend}
+              >
+                {/* Legend */}
+                <View style={styles.legend}>
+                  <Text style={styles.legendTitle}>Rating Scale</Text>
+                  <View style={styles.legendItems}>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendColor, { backgroundColor: '#186A3B' }]} />
+                      <Text style={styles.legendText}>Awesome (9.0+)</Text>
                     </View>
-                  ))}
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendColor, { backgroundColor: '#28B463' }]} />
+                      <Text style={styles.legendText}>Great (8.0-8.9)</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendColor, { backgroundColor: '#F4D03F' }]} />
+                      <Text style={styles.legendText}>Good (7.5-7.9)</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendColor, { backgroundColor: '#F39C12' }]} />
+                      <Text style={styles.legendText}>Regular (7.0-7.4)</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendColor, { backgroundColor: '#E74C3C' }]} />
+                      <Text style={styles.legendText}>Bad (6.0-6.9)</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendColor, { backgroundColor: '#633974' }]} />
+                      <Text style={styles.legendText}>Garbage ({'<'}6.0)</Text>
+                    </View>
+                  </View>
+                  <View style={styles.warningLegends}>
+                    <View style={styles.warningLegend}>
+                      <MaterialIcons name="warning" size={16} color={colors.warning} />
+                      <Text style={styles.warningText}>Rating differs significantly from IMDb</Text>
+                    </View>
+                    <View style={styles.warningLegend}>
+                      <MaterialIcons name="schedule" size={16} color={colors.primary} />
+                      <Text style={styles.warningText}>Current season (ratings may change)</Text>
+                    </View>
+                  </View>
                 </View>
+              </Animated.View>
 
-                {/* Scrollable Seasons */}
-                <ScrollView 
-                  horizontal 
-                  showsHorizontalScrollIndicator={false}
-                  style={styles.seasonsScrollView}
-                  onScroll={onScroll}
-                  scrollEventThrottle={16}
-                >
-                  <View>
-                    {/* Seasons Header */}
-                    <View style={styles.gridHeader}>
-                      {seasons.map((season) => (
-                        <View key={`s${season.season_number}`} style={styles.ratingColumn}>
-                          <Text style={styles.headerText}>S{season.season_number}</Text>
+              <Animated.View 
+                entering={FadeIn.delay(150).duration(150)}
+                style={styles.ratingsGrid}
+              >
+                {/* Ratings Grid */}
+                <View style={styles.ratingsGrid}>
+                  <View style={styles.gridContainer}>
+                    {/* Fixed Episode Column */}
+                    <View style={styles.fixedColumn}>
+                      <View style={styles.episodeColumn}>
+                        <Text style={styles.headerText}>Episode</Text>
+                      </View>
+                      {Array.from({ length: Math.max(...seasons.map(s => s.episodes.length)) }).map((_, episodeIndex) => (
+                        <View key={`e${episodeIndex + 1}`} style={styles.episodeCell}>
+                          <Text style={styles.episodeText}>E{episodeIndex + 1}</Text>
                         </View>
                       ))}
-                      {loadingSeasons && (
-                        <View style={[styles.ratingColumn, styles.loadingColumn]}>
-                          <View style={styles.loadingProgressContainer}>
-                            <ActivityIndicator size="small" color={colors.primary} />
-                            {loadingProgress > 0 && (
-                              <Text style={styles.loadingProgressText}>
-                                {Math.round(loadingProgress)}%
-                              </Text>
-                            )}
-                          </View>
-                        </View>
-                      )}
                     </View>
 
-                    {/* Episodes Grid */}
-                    {Array.from({ length: Math.max(...seasons.map(s => s.episodes.length)) }).map((_, episodeIndex) => (
-                      <View key={`e${episodeIndex + 1}`} style={styles.gridRow}>
-                        {seasons.map((season) => (
-                          <View key={`s${season.season_number}e${episodeIndex + 1}`} style={styles.ratingColumn}>
-                            {season.episodes[episodeIndex] && 
-                              renderRatingCell(season.episodes[episodeIndex])
-                            }
+                    {/* Scrollable Seasons */}
+                    <ScrollView 
+                      horizontal 
+                      showsHorizontalScrollIndicator={false}
+                      style={styles.seasonsScrollView}
+                      onScroll={onScroll}
+                      scrollEventThrottle={16}
+                    >
+                      <View>
+                        {/* Seasons Header */}
+                        <View style={styles.gridHeader}>
+                          {seasons.map((season) => (
+                            <View key={`s${season.season_number}`} style={styles.ratingColumn}>
+                              <Text style={styles.headerText}>S{season.season_number}</Text>
+                            </View>
+                          ))}
+                          {loadingSeasons && (
+                            <View style={[styles.ratingColumn, styles.loadingColumn]}>
+                              <View style={styles.loadingProgressContainer}>
+                                <ActivityIndicator size="small" color={colors.primary} />
+                                {loadingProgress > 0 && (
+                                  <Text style={styles.loadingProgressText}>
+                                    {Math.round(loadingProgress)}%
+                                  </Text>
+                                )}
+                              </View>
+                            </View>
+                          )}
+                        </View>
+
+                        {/* Episodes Grid */}
+                        {Array.from({ length: Math.max(...seasons.map(s => s.episodes.length)) }).map((_, episodeIndex) => (
+                          <View key={`e${episodeIndex + 1}`} style={styles.gridRow}>
+                            {seasons.map((season) => (
+                              <View key={`s${season.season_number}e${episodeIndex + 1}`} style={styles.ratingColumn}>
+                                {season.episodes[episodeIndex] && 
+                                  <RatingCell
+                                    episode={season.episodes[episodeIndex]}
+                                    ratingSource={ratingSource}
+                                    getTVMazeRating={getTVMazeRating}
+                                    isCurrentSeason={isCurrentSeason}
+                                  />
+                                }
+                              </View>
+                            ))}
+                            {loadingSeasons && <View style={[styles.ratingColumn, styles.loadingColumn]} />}
                           </View>
                         ))}
-                        {loadingSeasons && <View style={[styles.ratingColumn, styles.loadingColumn]} />}
                       </View>
-                    ))}
+                    </ScrollView>
                   </View>
-                </ScrollView>
-              </View>
+                </View>
+              </Animated.View>
             </View>
-          </View>
-        </ScrollView>
+          </ScrollView>
+        </Suspense>
       </SafeAreaView>
-    </Animated.View>
+    </View>
   );
 };
 
@@ -532,6 +540,9 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  showInfoContainer: {
+    marginBottom: 12,
   },
   showInfo: {
     flexDirection: 'row',
@@ -777,4 +788,6 @@ const styles = StyleSheet.create({
   },
 });
 
-export default ShowRatingsScreen; 
+export default memo(ShowRatingsScreen, (prevProps, nextProps) => {
+  return prevProps.route.params.showId === nextProps.route.params.showId;
+}); 

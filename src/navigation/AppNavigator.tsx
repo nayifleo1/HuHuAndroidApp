@@ -2,10 +2,12 @@ import React from 'react';
 import { NavigationContainer, DefaultTheme as NavigationDefaultTheme, DarkTheme as NavigationDarkTheme, Theme } from '@react-navigation/native';
 import { createNativeStackNavigator, NativeStackNavigationOptions } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { useColorScheme, Platform, Animated, StatusBar } from 'react-native';
+import { useColorScheme, Platform, Animated, StatusBar, TouchableOpacity, View, Text } from 'react-native';
 import { PaperProvider, MD3DarkTheme, MD3LightTheme, adaptNavigationTheme } from 'react-native-paper';
 import type { MD3Theme } from 'react-native-paper';
+import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import LinearGradient from 'react-native-linear-gradient';
 import { colors } from '../styles/colors';
 
 // Screens
@@ -20,13 +22,15 @@ import {
   AddonsScreen,
   SearchScreen,
   ShowRatingsScreen,
-  CatalogSettingsScreen
+  CatalogSettingsScreen,
+  StreamsScreen
 } from '../screens';
 
 // Stack navigator types
 export type RootStackParamList = {
   MainTabs: undefined;
   Metadata: { id: string; type: string };
+  Streams: { id: string; type: string; episodeId?: string };
   Player: { id: string; type: string; title?: string; poster?: string; stream?: string };
   Catalog: { id: string; type: string; addonId: string };
   Addons: undefined;
@@ -40,6 +44,7 @@ export type MainTabParamList = {
   Home: undefined;
   Discover: undefined;
   Library: undefined;
+  Addons: undefined;
   Settings: undefined;
 };
 
@@ -213,8 +218,100 @@ const CustomNavigationDarkTheme: Theme = {
 const MainTabs = () => {
   const isDarkMode = useColorScheme() === 'dark';
   
+  const renderTabBar = (props: BottomTabBarProps) => {
+    return (
+      <View style={{ 
+        position: 'absolute', 
+        bottom: 0, 
+        left: 0, 
+        right: 0,
+        height: 75,
+      }}>
+        <LinearGradient
+          colors={[
+            'rgba(0, 0, 0, 0)',
+            'rgba(0, 0, 0, 0.65)',
+            'rgba(0, 0, 0, 0.85)',
+            'rgba(0, 0, 0, 0.98)',
+          ]}
+          locations={[0, 0.2, 0.4, 0.8]}
+          style={{
+            position: 'absolute',
+            height: '100%',
+            width: '100%',
+          }}
+        />
+        <View
+          style={{
+            height: '100%',
+            paddingBottom: 10,
+            paddingTop: 12,
+          }}
+        >
+          <View style={{ flexDirection: 'row', paddingTop: 4 }}>
+            {props.state.routes.map((route, index) => {
+              const { options } = props.descriptors[route.key];
+              const label =
+                options.tabBarLabel !== undefined
+                  ? options.tabBarLabel
+                  : options.title !== undefined
+                  ? options.title
+                  : route.name;
+
+              const isFocused = props.state.index === index;
+
+              const onPress = () => {
+                const event = props.navigation.emit({
+                  type: 'tabPress',
+                  target: route.key,
+                  canPreventDefault: true,
+                });
+
+                if (!isFocused && !event.defaultPrevented) {
+                  props.navigation.navigate(route.name);
+                }
+              };
+
+              return (
+                <TouchableOpacity
+                  key={route.key}
+                  activeOpacity={1}
+                  onPress={onPress}
+                  style={{
+                    flex: 1,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    backgroundColor: 'transparent',
+                  }}
+                >
+                  {options.tabBarIcon?.({
+                    focused: isFocused,
+                    color: isFocused ? colors.primary : '#FFFFFF',
+                    size: 24,
+                  })}
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      fontWeight: '600',
+                      marginTop: 4,
+                      color: isFocused ? colors.primary : '#FFFFFF',
+                      opacity: isFocused ? 1 : 0.7,
+                    }}
+                  >
+                    {typeof label === 'string' ? label : ''}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      </View>
+    );
+  };
+  
   return (
     <Tab.Navigator
+      tabBar={renderTabBar}
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
           let iconName = '';
@@ -229,37 +326,59 @@ const MainTabs = () => {
             case 'Library':
               iconName = 'bookmark';
               break;
+            case 'Addons':
+              iconName = 'puzzle';
+              break;
             case 'Settings':
-              iconName = 'account';
+              iconName = 'cog';
               break;
           }
           
           return (
-            <MaterialCommunityIcons 
-              name={focused ? iconName : `${iconName}-outline`}
-              size={24} 
-              color={color} 
-            />
+            <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+              <MaterialCommunityIcons 
+                name={focused ? iconName : `${iconName}-outline`}
+                size={24} 
+                color={color} 
+              />
+            </View>
           );
         },
         tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: isDarkMode ? '#888888' : '#666666',
+        tabBarInactiveTintColor: '#FFFFFF',
         tabBarStyle: {
-          backgroundColor: isDarkMode ? colors.darkBackground : colors.white,
+          position: 'absolute',
+          backgroundColor: 'transparent',
           borderTopWidth: 0,
           elevation: 0,
-          height: 65,
+          height: 75,
           paddingBottom: 10,
-          paddingTop: 10,
-          shadowColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
-          shadowOffset: { width: 0, height: -2 },
-          shadowOpacity: 0.25,
-          shadowRadius: 8,
+          paddingTop: 12,
         },
         tabBarLabelStyle: {
           fontSize: 12,
           fontWeight: '600',
-          marginTop: 2,
+          marginTop: 0,
+        },
+        tabBarButton: (props) => {
+          const { style, onPress, children } = props;
+          return (
+            <TouchableOpacity
+              onPress={onPress}
+              activeOpacity={1}
+              style={[
+                style,
+                { 
+                  backgroundColor: 'transparent',
+                  flex: 1,
+                  justifyContent: 'center',
+                  alignItems: 'center'
+                }
+              ]}
+            >
+              {children}
+            </TouchableOpacity>
+          );
         },
         headerStyle: {
           backgroundColor: isDarkMode ? colors.darkBackground : colors.white,
@@ -315,12 +434,21 @@ const MainTabs = () => {
         }}
       />
       <Tab.Screen 
+        name="Addons" 
+        component={AddonsScreen}
+        options={{ 
+          title: 'HUHU',
+          headerShown: true,
+          tabBarLabel: 'Addons'
+        }}
+      />
+      <Tab.Screen 
         name="Settings" 
         component={SettingsScreen}
         options={{ 
           title: 'HUHU',
           headerShown: true,
-          tabBarLabel: 'Profile'
+          tabBarLabel: 'Settings'
         }}
       />
     </Tab.Navigator>
@@ -347,6 +475,7 @@ const AppNavigator = () => {
         >
           <Stack.Screen name="MainTabs" component={MainTabs} />
           <Stack.Screen name="Metadata" component={MetadataScreen} />
+          <Stack.Screen name="Streams" component={StreamsScreen} />
           <Stack.Screen name="Player" component={PlayerScreen} />
           <Stack.Screen name="Catalog" component={CatalogScreen} />
           <Stack.Screen name="Addons" component={AddonsScreen} />
@@ -356,14 +485,14 @@ const AppNavigator = () => {
             name="ShowRatings" 
             component={ShowRatingsScreen}
             options={{
-              animation: 'slide_from_right',
-              animationDuration: 300,
+              animation: 'fade',
+              animationDuration: 200,
               presentation: 'card',
               gestureEnabled: true,
               gestureDirection: 'horizontal',
               headerShown: false,
               contentStyle: {
-                backgroundColor: 'transparent',
+                backgroundColor: colors.darkBackground,
               },
             }}
           />

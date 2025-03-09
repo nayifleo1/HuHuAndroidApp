@@ -9,6 +9,10 @@ interface VideoPlayerOptions {
   poster?: string;
   subtitleUrl?: string;
   subtitleLanguage?: string;
+  headers?: Record<string, string>;
+  episodeTitle?: string;
+  episodeNumber?: string;
+  releaseDate?: string;
 }
 
 export const VideoPlayerService = {

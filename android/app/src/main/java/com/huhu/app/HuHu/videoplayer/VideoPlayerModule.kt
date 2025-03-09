@@ -23,6 +23,9 @@ class VideoPlayerModule(reactContext: ReactApplicationContext) : ReactContextBas
             
             val useExternalPlayer = if (options.hasKey("useExternalPlayer")) options.getBoolean("useExternalPlayer") else false
             val title = if (options.hasKey("title")) options.getString("title") else "Video"
+            val episodeTitle = if (options.hasKey("episodeTitle")) options.getString("episodeTitle") else null
+            val episodeNumber = if (options.hasKey("episodeNumber")) options.getString("episodeNumber") else null
+            val releaseDate = if (options.hasKey("releaseDate")) options.getString("releaseDate") else null
             val poster = if (options.hasKey("poster")) options.getString("poster") else null
             
             // Handle subtitles
@@ -46,7 +49,12 @@ class VideoPlayerModule(reactContext: ReactApplicationContext) : ReactContextBas
                 // Use ExoPlayer
                 val intent = Intent(reactApplicationContext, ExoPlayerActivity::class.java).apply {
                     putExtra("VIDEO_URL", url)
-                    putExtra("VIDEO_TITLE", title)
+                    putExtra("VIDEO_TITLE", when {
+                        episodeTitle != null && episodeNumber != null -> "$title - $episodeNumber: $episodeTitle"
+                        episodeTitle != null -> "$title - $episodeTitle"
+                        releaseDate != null -> "$title (${releaseDate.take(4)})" // Take just the year from the date
+                        else -> title
+                    })
                     putExtra("POSTER_URL", poster)
                     
                     // Add subtitle info if available
@@ -58,21 +66,12 @@ class VideoPlayerModule(reactContext: ReactApplicationContext) : ReactContextBas
                     
                     // Add headers if available
                     if (headers != null) {
-                        Log.d(TAG, "Headers available: ${headers.toString()}")
-                        if (headers.hasKey("Referer")) {
-                            val referer = headers.getString("Referer")
-                            Log.d(TAG, "Adding Referer header: $referer")
-                            putExtra("HEADER_REFERER", referer)
-                        }
-                        if (headers.hasKey("User-Agent")) {
-                            val userAgent = headers.getString("User-Agent")
-                            Log.d(TAG, "Adding User-Agent header: $userAgent")
-                            putExtra("HEADER_USER_AGENT", userAgent)
-                        }
-                        if (headers.hasKey("Origin")) {
-                            val origin = headers.getString("Origin")
-                            Log.d(TAG, "Adding Origin header: $origin")
-                            putExtra("HEADER_ORIGIN", origin)
+                        headers.toHashMap().forEach { (key, value) ->
+                            when (key) {
+                                "Referer" -> putExtra("HEADER_REFERER", value as String)
+                                "User-Agent" -> putExtra("HEADER_USER_AGENT", value as String)
+                                "Origin" -> putExtra("HEADER_ORIGIN", value as String)
+                            }
                         }
                     }
                 }
@@ -81,8 +80,8 @@ class VideoPlayerModule(reactContext: ReactApplicationContext) : ReactContextBas
                 promise.resolve(true)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error playing video: ${e.message}", e)
-            promise.reject("VIDEO_PLAYER_ERROR", e.message)
+            Log.e(TAG, "Error playing video: ${e.message}")
+            promise.reject("ERROR", e.message)
         }
     }
     

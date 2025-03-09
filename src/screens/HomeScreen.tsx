@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,21 +14,290 @@ import {
   ImageBackground,
   ScrollView,
   Platform,
-  Image
+  Image,
+  Vibration,
+  Modal,
+  Pressable
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { NavigationProp } from '@react-navigation/native';
+import { RootStackParamList } from '../types/navigation';
 import { StreamingContent, CatalogContent, catalogService } from '../services/catalogService';
+import { Stream } from '../types/metadata';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import FastImage from '@d11/react-native-fast-image';
 import { colors } from '../styles/colors';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import Animated, { 
+  FadeIn, 
+  FadeOut,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  useSharedValue,
+  interpolate,
+  Extrapolate,
+  runOnJS,
+  useAnimatedGestureHandler,
+} from 'react-native-reanimated';
+import { PanGestureHandler } from 'react-native-gesture-handler';
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from 'react-native-gesture-handler';
 
 // Define interfaces for our data
 interface Category {
   id: string;
   name: string;
 }
+
+interface ContentItemProps {
+  item: StreamingContent;
+  onPress: (id: string, type: string) => void;
+}
+
+interface DropUpMenuProps {
+  visible: boolean;
+  onClose: () => void;
+  item: StreamingContent;
+  onOptionSelect: (option: string) => void;
+}
+
+const DropUpMenu = ({ visible, onClose, item, onOptionSelect }: DropUpMenuProps) => {
+  const translateY = useSharedValue(300);
+  const opacity = useSharedValue(0);
+  const isDarkMode = useColorScheme() === 'dark';
+  const SNAP_THRESHOLD = 100;
+
+  useEffect(() => {
+    if (visible) {
+      opacity.value = withTiming(1, { duration: 200 });
+      translateY.value = withTiming(0, { duration: 300 });
+    } else {
+      opacity.value = withTiming(0, { duration: 200 });
+      translateY.value = withTiming(300, { duration: 300 });
+    }
+  }, [visible]);
+
+  const gesture = Gesture.Pan()
+    .onStart(() => {
+      // Store initial position if needed
+    })
+    .onUpdate((event) => {
+      if (event.translationY > 0) { // Only allow dragging downwards
+        translateY.value = event.translationY;
+        opacity.value = interpolate(
+          event.translationY,
+          [0, 300],
+          [1, 0],
+          Extrapolate.CLAMP
+        );
+      }
+    })
+    .onEnd((event) => {
+      if (event.translationY > SNAP_THRESHOLD || event.velocityY > 500) {
+        translateY.value = withTiming(300, { duration: 300 });
+        opacity.value = withTiming(0, { duration: 200 });
+        runOnJS(onClose)();
+      } else {
+        translateY.value = withTiming(0, { duration: 300 });
+        opacity.value = withTiming(1, { duration: 200 });
+      }
+    });
+
+  const overlayStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+  }));
+
+  const menuStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: translateY.value }],
+  }));
+
+  const menuOptions = [
+    {
+      icon: item.inLibrary ? 'bookmark' : 'bookmark-add',
+      label: item.inLibrary ? 'Remove from Library' : 'Add to Library',
+      action: 'library'
+    },
+    {
+      icon: 'check-circle',
+      label: 'Mark as Watched',
+      action: 'watched'
+    },
+    {
+      icon: 'playlist-add',
+      label: 'Add to Playlist',
+      action: 'playlist'
+    },
+    {
+      icon: 'share',
+      label: 'Share',
+      action: 'share'
+    }
+  ];
+
+  const backgroundColor = isDarkMode ? '#1A1A1A' : '#FFFFFF';
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="none"
+      onRequestClose={onClose}
+    >
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <Animated.View style={[styles.modalOverlay, overlayStyle]}>
+          <Pressable style={styles.modalOverlayPressable} onPress={onClose} />
+          <GestureDetector gesture={gesture}>
+            <Animated.View style={[styles.menuContainer, menuStyle, { backgroundColor }]}>
+              <View style={styles.dragHandle} />
+              <View style={styles.menuHeader}>
+                <FastImage
+                  source={{ uri: item.poster }}
+                  style={styles.menuPoster}
+                  resizeMode={FastImage.resizeMode.cover}
+                />
+                <View style={styles.menuTitleContainer}>
+                  <Text style={[styles.menuTitle, { color: isDarkMode ? '#FFFFFF' : '#000000' }]}>
+                    {item.name}
+                  </Text>
+                  {item.year && (
+                    <Text style={[styles.menuYear, { color: isDarkMode ? '#999999' : '#666666' }]}>
+                      {item.year}
+                    </Text>
+                  )}
+                </View>
+              </View>
+              <View style={styles.menuOptions}>
+                {menuOptions.map((option, index) => (
+                  <TouchableOpacity
+                    key={option.action}
+                    style={[
+                      styles.menuOption,
+                      { borderBottomColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' },
+                      index === menuOptions.length - 1 && styles.lastMenuOption
+                    ]}
+                    onPress={() => {
+                      onOptionSelect(option.action);
+                      onClose();
+                    }}
+                  >
+                    <MaterialIcons
+                      name={option.icon}
+                      size={24}
+                      color={isDarkMode ? '#FFFFFF' : '#000000'}
+                    />
+                    <Text style={[
+                      styles.menuOptionText,
+                      { color: isDarkMode ? '#FFFFFF' : '#000000' }
+                    ]}>
+                      {option.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </Animated.View>
+          </GestureDetector>
+        </Animated.View>
+      </GestureHandlerRootView>
+    </Modal>
+  );
+};
+
+const ContentItem = ({ item: initialItem, onPress }: ContentItemProps) => {
+  // All hooks must be called before any conditional logic
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [localItem, setLocalItem] = useState(initialItem);
+  const [isWatched, setIsWatched] = useState(false);
+
+  // Memoize callbacks to prevent unnecessary re-renders
+  const handleLongPress = useCallback(() => {
+    setMenuVisible(true);
+    Vibration.vibrate(50);
+  }, []);
+
+  const handlePress = useCallback(() => {
+    onPress(localItem.id, localItem.type);
+  }, [localItem.id, localItem.type, onPress]);
+
+  const handleOptionSelect = useCallback((option: string) => {
+    switch (option) {
+      case 'library':
+        if (localItem.inLibrary) {
+          catalogService.removeFromLibrary(localItem.type, localItem.id);
+        } else {
+          catalogService.addToLibrary(localItem);
+        }
+        break;
+      case 'watched':
+        setIsWatched(prev => !prev);
+        break;
+      case 'playlist':
+        break;
+      case 'share':
+        break;
+    }
+  }, [localItem]);
+
+  const handleMenuClose = useCallback(() => {
+    setMenuVisible(false);
+  }, []);
+
+  // Effects must also be called consistently
+  useEffect(() => {
+    setLocalItem(initialItem);
+  }, [initialItem]);
+
+  useEffect(() => {
+    const unsubscribe = catalogService.subscribeToLibraryUpdates((libraryItems) => {
+      const isInLibrary = libraryItems.some(
+        libraryItem => libraryItem.id === localItem.id && libraryItem.type === localItem.type
+      );
+      setLocalItem(prev => ({ ...prev, inLibrary: isInLibrary }));
+    });
+
+    return () => unsubscribe();
+  }, [localItem.id, localItem.type]);
+
+  return (
+    <>
+      <TouchableOpacity
+        style={styles.contentItem}
+        activeOpacity={0.7}
+        onPress={handlePress}
+        onLongPress={handleLongPress}
+        delayLongPress={300}
+      >
+        <View style={styles.contentItemContainer}>
+          <FastImage
+            source={{ uri: localItem.poster }}
+            style={styles.poster}
+            resizeMode={FastImage.resizeMode.cover}
+          />
+          {isWatched && (
+            <View style={styles.watchedIndicator}>
+              <MaterialIcons name="check-circle" size={24} color="#00C853" />
+            </View>
+          )}
+          {localItem.inLibrary && (
+            <View style={styles.libraryBadge}>
+              <MaterialIcons name="bookmark" size={16} color="#FFFFFF" />
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+      
+      <DropUpMenu
+        visible={menuVisible}
+        onClose={handleMenuClose}
+        item={localItem}
+        onOptionSelect={handleOptionSelect}
+      />
+    </>
+  );
+};
 
 // Sample categories (real app would get these from API)
 const SAMPLE_CATEGORIES: Category[] = [
@@ -77,7 +346,7 @@ const SkeletonFeatured = () => (
 );
 
 const HomeScreen = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const isDarkMode = useColorScheme() === 'dark';
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -86,6 +355,16 @@ const HomeScreen = () => {
   const [allFeaturedContent, setAllFeaturedContent] = useState<StreamingContent[]>([]);
   const [catalogs, setCatalogs] = useState<CatalogContent[]>([]);
   const maxRetries = 3;
+
+  // Pre-warm the metadata screen
+  useEffect(() => {
+    // Pre-warm the navigation
+    navigation.addListener('beforeRemove', () => {});
+    
+    return () => {
+      navigation.removeListener('beforeRemove', () => {});
+    };
+  }, [navigation]);
 
   // Function to rotate featured content
   const rotateFeaturedContent = useCallback(() => {
@@ -116,13 +395,8 @@ const HomeScreen = () => {
           // Load catalogs from service
           const homeCatalogs = await catalogService.getHomeCatalogs();
           
-          // Filter for Cinemeta catalogs only
-          const allCinemetaCatalogs = homeCatalogs.filter(catalog => 
-            catalog.addon === 'com.linvo.cinemeta'
-          );
-
           // If no catalogs found, wait and retry
-          if (allCinemetaCatalogs.length === 0) {
+          if (homeCatalogs.length === 0) {
             attempt++;
             console.log(`No catalogs found, retrying... (attempt ${attempt})`);
             await delay(2000); // Wait 2 seconds before next attempt
@@ -132,7 +406,7 @@ const HomeScreen = () => {
           // Create a map to store unique catalogs by their content
           const uniqueCatalogsMap = new Map();
           
-          allCinemetaCatalogs.forEach(catalog => {
+          homeCatalogs.forEach(catalog => {
             // Create a key based on the items' IDs to detect duplicate content
             const contentKey = catalog.items.map(item => item.id).sort().join(',');
             
@@ -143,27 +417,27 @@ const HomeScreen = () => {
           });
 
           // Convert map back to array
-          const cinemetaCatalogs = Array.from(uniqueCatalogsMap.values());
+          const uniqueCatalogs = Array.from(uniqueCatalogsMap.values());
 
-          // Find popular content from Cinemeta
-          const popularCatalog = cinemetaCatalogs.find(catalog => 
+          // Find popular content from any catalog
+          const popularCatalog = uniqueCatalogs.find(catalog => 
             catalog.name.toLowerCase().includes('popular') || 
             catalog.name.toLowerCase().includes('top') ||
             catalog.id.toLowerCase().includes('top')
           );
 
-          // Set catalogs showing only unique Cinemeta content
-          setCatalogs(cinemetaCatalogs);
-          
-          // Set featured content from popular Cinemeta content
+          // Set catalogs showing all unique content
+          setCatalogs(uniqueCatalogs);
+
+          // Set featured content from popular content
           if (popularCatalog && popularCatalog.items.length > 0) {
             setAllFeaturedContent(popularCatalog.items);
             const randomIndex = Math.floor(Math.random() * popularCatalog.items.length);
             setFeaturedContent(popularCatalog.items[randomIndex]);
-          } else if (cinemetaCatalogs.length > 0 && cinemetaCatalogs[0].items.length > 0) {
-            // Fall back to first Cinemeta catalog
-            setAllFeaturedContent(cinemetaCatalogs[0].items);
-            setFeaturedContent(cinemetaCatalogs[0].items[0]);
+          } else if (uniqueCatalogs.length > 0 && uniqueCatalogs[0].items.length > 0) {
+            // Fall back to first catalog
+            setAllFeaturedContent(uniqueCatalogs[0].items);
+            setFeaturedContent(uniqueCatalogs[0].items[0]);
           }
 
           // If we get here, we've successfully loaded content
@@ -197,54 +471,79 @@ const HomeScreen = () => {
   }, [loadContent]);
 
   useEffect(() => {
-    loadContent();
+          loadContent();
   }, [loadContent]);
 
   const handleCategoryChange = (categoryId: string) => {
     setSelectedCategory(categoryId);
   };
 
+  const handleContentPress = useCallback((id: string, type: string) => {
+    // Immediate navigation without any delays
+    navigation.navigate('Metadata', { id, type });
+  }, [navigation]);
+
+  const handlePlayStream = useCallback((stream: Stream) => {
+    if (!featuredContent) return;
+    
+    navigation.navigate('Player', {
+      id: featuredContent.id,
+      type: featuredContent.type,
+      stream: stream.url,
+      headers: stream.headers,
+      subtitles: stream.subtitles
+    });
+  }, [featuredContent, navigation]);
+
   const renderFeaturedContent = () => {
     if (!featuredContent) return null;
 
     return (
-      <TouchableOpacity
+              <TouchableOpacity
         style={styles.featuredContainer}
         activeOpacity={0.9}
-        onPress={() => navigation.navigate('Metadata', { 
-          id: featuredContent.id, 
-          type: featuredContent.type
-        })}
+                onPress={() => navigation.navigate('Metadata', { 
+                  id: featuredContent.id, 
+                  type: featuredContent.type
+                })}
       >
         <ImageBackground
           source={{ uri: featuredContent.banner || featuredContent.poster }}
           style={styles.featuredBanner}
           resizeMode="cover"
-        >
-          <LinearGradient
-            colors={['rgba(0,0,0,0.1)', 'rgba(0,0,0,0.7)', 'rgba(0,0,0,0.95)']}
-            style={styles.featuredGradient}
-          >
-            <View style={styles.featuredContent}>
-              {featuredContent.logo ? (
-                <FastImage
+              >
+                <LinearGradient
+                  colors={[
+                    'transparent',
+                    `${colors.darkBackground}26`, // 15% opacity
+                    `${colors.darkBackground}40`, // 25% opacity
+                    `${colors.darkBackground}B3`, // 70% opacity
+                    `${colors.darkBackground}E6`, // 90% opacity
+                    colors.darkBackground      // solid background color
+                  ]}
+                  locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
+                  style={styles.featuredGradient}
+                >
+                  <View style={styles.featuredContent}>
+                      {featuredContent.logo ? (
+                        <FastImage
                   source={{ uri: featuredContent.logo }}
                   style={styles.featuredLogo}
-                  resizeMode={FastImage.resizeMode.contain}
-                />
-              ) : (
+                          resizeMode={FastImage.resizeMode.contain}
+                        />
+                      ) : (
                 <Text style={styles.featuredTitle}>{featuredContent.name}</Text>
-              )}
-              
-              {featuredContent.genres && featuredContent.genres.length > 0 && (
-                <View style={styles.genreContainer}>
-                  {featuredContent.genres.slice(0, 3).map((genre, index) => (
-                    <View key={index} style={styles.genreChip}>
-                      <Text style={styles.genreText}>{genre}</Text>
-                    </View>
-                  ))}
-                </View>
-              )}
+                      )}
+
+                    {featuredContent.genres && featuredContent.genres.length > 0 && (
+                      <View style={styles.genreContainer}>
+                        {featuredContent.genres.slice(0, 3).map((genre, index) => (
+                          <View key={index} style={styles.genreChip}>
+                            <Text style={styles.genreText}>{genre}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
               
               <View style={styles.featuredMeta}>
                 {featuredContent.year && (
@@ -263,62 +562,49 @@ const HomeScreen = () => {
                 )}
               </View>
 
-              {featuredContent.description && (
-                <Text style={styles.description} numberOfLines={3}>
-                  {featuredContent.description}
-                </Text>
-              )}
-              
-              <View style={styles.featuredButtons}>
-                <TouchableOpacity 
-                  style={[styles.featuredButton, styles.playButton]}
-                  onPress={() => navigation.navigate('Player', { 
-                    id: featuredContent?.id, 
-                    type: featuredContent?.type
-                  })}
-                >
-                  <MaterialIcons name="play-arrow" color="#000000" size={24} />
-                  <Text style={styles.playButtonText}>Play</Text>
-                </TouchableOpacity>
+                    {featuredContent.description && (
+                      <Text style={styles.description} numberOfLines={3}>
+                        {featuredContent.description}
+                      </Text>
+                    )}
+
+                    <View style={styles.featuredButtons}>
+                      <TouchableOpacity
+                        style={[styles.featuredButton, styles.playButton]}
+                        onPress={() => {
+                          if (featuredContent) {
+                            navigation.navigate('Streams', { 
+                              id: featuredContent.id, 
+                              type: featuredContent.type
+                            });
+                          }
+                        }}
+                      >
+                        <MaterialIcons name="play-arrow" color="#000000" size={24} />
+                        <Text style={styles.playButtonText}>Play</Text>
+                      </TouchableOpacity>
                 
-                <TouchableOpacity 
+                      <TouchableOpacity
                   style={[styles.featuredButton, styles.infoButton]}
-                  onPress={() => navigation.navigate('Metadata', { 
+                        onPress={() => navigation.navigate('Metadata', {
                     id: featuredContent?.id, 
                     type: featuredContent?.type
                   })}
                 >
                   <MaterialIcons name="info-outline" color="#FFFFFF" size={20} />
                   <Text style={styles.infoButtonText}>More Info</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </LinearGradient>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </LinearGradient>
         </ImageBackground>
-      </TouchableOpacity>
+              </TouchableOpacity>
     );
   };
 
-  const renderContentItem = ({ item }: { item: StreamingContent }) => (
-    <TouchableOpacity
-      style={styles.contentItem}
-      activeOpacity={0.8}
-      onPress={() => navigation.navigate('Metadata', { 
-        id: item.id, 
-        type: item.type
-      })}
-    >
-      <FastImage
-        source={{ uri: item.poster }}
-        style={styles.poster}
-        resizeMode={FastImage.resizeMode.cover}
-      />
-      <LinearGradient
-        colors={['transparent', 'rgba(0,0,0,0.8)']}
-        style={styles.posterGradient}
-      />
-    </TouchableOpacity>
-  );
+  const renderContentItem = useCallback(({ item }: { item: StreamingContent }) => {
+    return <ContentItem item={item} onPress={handleContentPress} />;
+  }, [handleContentPress]);
 
   const renderCatalog = ({ item }: { item: CatalogContent }) => {
     return (
@@ -350,9 +636,10 @@ const HomeScreen = () => {
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.catalogList}
-          snapToInterval={POSTER_WIDTH + 16}
+          snapToInterval={POSTER_WIDTH + 10}
           decelerationRate="fast"
           snapToAlignment="start"
+          ItemSeparatorComponent={() => <View style={{ width: 10 }} />}
         />
       </View>
     );
@@ -360,15 +647,13 @@ const HomeScreen = () => {
 
   if (loading && !refreshing) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#000000' : '#FFFFFF' }]}>
+      <SafeAreaView style={[styles.container]}>
         <StatusBar
           barStyle="light-content"
           backgroundColor="transparent"
           translucent
         />
-        <Animated.ScrollView 
-          entering={FadeIn.duration(300)}
-          exiting={FadeOut.duration(300)}
+        <ScrollView 
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
@@ -376,24 +661,22 @@ const HomeScreen = () => {
           {[1, 2, 3].map((_, index) => (
             <SkeletonCatalog key={index} />
           ))}
-        </Animated.ScrollView>
+        </ScrollView>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#000000' : '#FFFFFF' }]}>
+    <SafeAreaView style={[styles.container]}>
       <StatusBar
         barStyle="light-content"
         backgroundColor="transparent"
         translucent
       />
 
-      <Animated.ScrollView
-        entering={FadeIn.duration(300)}
-        exiting={FadeOut.duration(300)}
+      <ScrollView
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={isDarkMode ? '#FFFFFF' : '#121212'} />
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.text} />
         }
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
@@ -411,25 +694,26 @@ const HomeScreen = () => {
           />
         ) : (
           <View style={styles.emptyCatalog}>
-            <Text style={{ color: isDarkMode ? '#888' : '#666' }}>
+            <Text style={{ color: colors.textDark }}>
               No content available. Pull down to refresh.
             </Text>
           </View>
         )}
-      </Animated.ScrollView>
+      </ScrollView>
     </SafeAreaView>
   );
 };
 
 const { width, height } = Dimensions.get('window');
-const POSTER_WIDTH = (width - 48) / 3;
+const POSTER_WIDTH = (width - 40) / 2.7;
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: colors.darkBackground,
   },
   scrollContent: {
-    paddingBottom: 24,
+    paddingBottom: 32,
   },
   loadingContainer: {
     flex: 1,
@@ -440,6 +724,15 @@ const styles = StyleSheet.create({
     width: '100%',
     height: height * 0.75,
     marginTop: -(StatusBar.currentHeight || 0),
+    marginBottom: 0,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    overflow: 'hidden',
+    elevation: 0,
+    shadowColor: 'transparent',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0,
+    shadowRadius: 0,
   },
   featuredBanner: {
     width: '100%',
@@ -452,33 +745,33 @@ const styles = StyleSheet.create({
   },
   featuredContent: {
     padding: 24,
-    paddingBottom: 32,
+    paddingBottom: 24,
   },
   featuredLogo: {
     width: width * 0.6,
     height: 100,
     marginBottom: 16,
     alignSelf: 'flex-start',
-    backgroundColor: 'transparent',
+    backgroundColor: colors.transparent,
     minHeight: 60,
     maxHeight: 100,
   },
   featuredTitle: {
-    color: '#FFFFFF',
+    color: colors.highEmphasis,
     fontSize: 32,
     fontWeight: '900',
     marginBottom: 16,
-    textShadowColor: 'rgba(0,0,0,0.4)',
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 4,
     letterSpacing: -0.5,
   },
   description: {
-    color: 'rgba(255,255,255,0.85)',
+    color: colors.mediumEmphasis,
     fontSize: 15,
     lineHeight: 22,
     marginBottom: 20,
-    textShadowColor: 'rgba(0,0,0,0.4)',
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
   },
@@ -488,27 +781,31 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   genreChip: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: colors.elevation3,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
     marginRight: 8,
     marginBottom: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   genreText: {
-    color: '#FFFFFF',
+    color: colors.highEmphasis,
     fontSize: 12,
     fontWeight: '600',
   },
   yearChip: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: colors.elevation3,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
     marginRight: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   yearText: {
-    color: '#FFFFFF',
+    color: colors.highEmphasis,
     fontSize: 12,
     fontWeight: '600',
   },
@@ -516,25 +813,28 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 16,
+    marginTop: 4,
   },
   ratingContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(245, 197, 24, 0.2)',
+    backgroundColor: colors.elevation3,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   ratingText: {
-    color: '#FFD700',
+    color: colors.highEmphasis,
     marginLeft: 4,
     fontWeight: '700',
     fontSize: 13,
   },
   featuredButtons: {
     flexDirection: 'row',
-    gap: 12,
-    marginTop: 8,
+    gap: 16,
+    marginTop: 12,
   },
   featuredButton: {
     flex: 1,
@@ -543,97 +843,102 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 14,
     borderRadius: 100,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   playButton: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.white,
   },
   playButtonText: {
-    color: '#000000',
-    fontWeight: '600',
+    color: colors.black,
+    fontWeight: '700',
     marginLeft: 8,
     fontSize: 16,
   },
   infoButton: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: colors.elevation2,
     borderWidth: 2,
-    borderColor: '#FFFFFF',
+    borderColor: colors.white,
   },
   infoButtonText: {
-    color: '#FFFFFF',
+    color: colors.white,
     marginLeft: 8,
-    fontWeight: '600',
+    fontWeight: '700',
     fontSize: 16,
   },
   catalogContainer: {
     marginBottom: 24,
+    paddingTop: 0,
+    marginTop: 12,
   },
   catalogHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   titleContainer: {
     position: 'relative',
   },
   catalogTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '800',
+    color: colors.highEmphasis,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginBottom: 4,
+    marginBottom: 6,
   },
   titleUnderline: {
     position: 'absolute',
     bottom: -4,
     left: 0,
-    width: 30,
-    height: 2,
-    backgroundColor: '#FFFFFF',
-    opacity: 0.3,
-    borderRadius: 1,
+    width: 40,
+    height: 3,
+    backgroundColor: colors.primary,
+    borderRadius: 1.5,
   },
   seeAllButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    opacity: 0.9,
+    backgroundColor: colors.elevation1,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
   },
   seeAllText: {
     color: colors.primary,
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
     marginRight: 4,
   },
   catalogList: {
-    paddingHorizontal: 12,
-    paddingBottom: 4,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    paddingTop: 4,
   },
   contentItem: {
     width: POSTER_WIDTH,
     aspectRatio: 2/3,
-    margin: 4,
+    margin: 0,
     borderRadius: 12,
     overflow: 'hidden',
     position: 'relative',
-    elevation: 5,
+    elevation: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
-    shadowRadius: 4,
+    shadowRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   poster: {
     width: '100%',
     height: '100%',
     borderRadius: 12,
-  },
-  posterGradient: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: '50%',
   },
   imdbLogo: {
     width: 35,
@@ -655,22 +960,148 @@ const styles = StyleSheet.create({
     marginLeft: 3,
   },
   emptyCatalog: {
-    padding: 24,
+    padding: 32,
     alignItems: 'center',
+    backgroundColor: colors.elevation1,
+    margin: 16,
+    borderRadius: 16,
   },
   skeletonBox: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 8,
+    backgroundColor: colors.elevation2,
+    borderRadius: 12,
     overflow: 'hidden',
   },
   skeletonFeatured: {
     width: '100%',
-    height: '100%',
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    height: height * 0.6,
+    backgroundColor: colors.elevation2,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    marginBottom: 0,
   },
   skeletonPoster: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: colors.elevation1,
     marginHorizontal: 4,
+    borderRadius: 12,
+  },
+  contentItemContainer: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  libraryIndicatorContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  libraryText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: colors.transparentDark,
+  },
+  modalOverlayPressable: {
+    flex: 1,
+  },
+  dragHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: colors.transparentLight,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  menuContainer: {
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingBottom: Platform.select({ ios: 40, android: 24 }),
+    ...Platform.select({
+      ios: {
+        shadowColor: colors.black,
+        shadowOffset: { width: 0, height: -3 },
+        shadowOpacity: 0.1,
+        shadowRadius: 5,
+      },
+      android: {
+        elevation: 5,
+      },
+    }),
+  },
+  menuHeader: {
+    flexDirection: 'row',
+    padding: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  menuPoster: {
+    width: 60,
+    height: 90,
+    borderRadius: 8,
+  },
+  menuTitleContainer: {
+    flex: 1,
+    marginLeft: 12,
+    justifyContent: 'center',
+  },
+  menuTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  menuYear: {
+    fontSize: 14,
+  },
+  menuOptions: {
+    paddingTop: 8,
+  },
+  menuOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  lastMenuOption: {
+    borderBottomWidth: 0,
+  },
+  menuOptionText: {
+    fontSize: 16,
+    marginLeft: 16,
+  },
+  watchedIndicator: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: colors.transparentDark,
+    borderRadius: 12,
+    padding: 2,
+  },
+  libraryBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    backgroundColor: colors.transparentDark,
+    borderRadius: 8,
+    padding: 4,
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 12,
   },
 });
 

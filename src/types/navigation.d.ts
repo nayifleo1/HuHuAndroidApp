@@ -7,12 +7,26 @@ export type RootStackParamList = {
     id: string;
     type: string;
   };
+  Streams: {
+    id: string;
+    type: string;
+    episodeId?: string;
+  };
   Player: {
     id: string;
     type: string;
     title?: string;
     poster?: string;
-    stream?: string;
+    stream: string;
+    headers?: {
+      Referer?: string;
+      'User-Agent'?: string;
+      Origin?: string;
+    };
+    subtitles?: Array<{
+      url: string;
+      lang: string;
+    }>;
   };
   Catalog: {
     addonId: string;

@@ -15,44 +15,14 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { colors } from '../styles/colors';
 import FastImage from '@d11/react-native-fast-image';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import { catalogService } from '../services/catalogService';
+import type { StreamingContent } from '../services/catalogService';
 
 // Types
-interface LibraryItem {
-  id: string;
-  name: string;
-  poster: string;
-  type: 'movie' | 'series';
+interface LibraryItem extends StreamingContent {
   progress?: number;
   lastWatched?: string;
 }
-
-// Sample data - in a real app, this would come from an API or local storage
-const SAMPLE_LIBRARY_ITEMS: LibraryItem[] = [
-  {
-    id: 'tt0944947',
-    name: 'Game of Thrones',
-    poster: 'https://image.tmdb.org/t/p/w500/u3bZgnGQ9T01sWNhyveQz0wH0Hl.jpg',
-    type: 'series',
-    progress: 0.7,
-    lastWatched: '2 days ago',
-  },
-  {
-    id: 'tt1375666',
-    name: 'Inception',
-    poster: 'https://image.tmdb.org/t/p/w500/9gk7adHYeDvHkCSEqAvQNLV5Uge.jpg',
-    type: 'movie',
-    progress: 0.3,
-    lastWatched: '1 week ago',
-  },
-  {
-    id: 'tt0468569',
-    name: 'The Dark Knight',
-    poster: 'https://image.tmdb.org/t/p/w500/qJ2tW6WMUDux911r6m7haRef0WH.jpg',
-    type: 'movie',
-    progress: 1.0,
-    lastWatched: '3 weeks ago',
-  },
-];
 
 const LibraryScreen = () => {
   const navigation = useNavigation();
@@ -63,17 +33,28 @@ const LibraryScreen = () => {
   const [filter, setFilter] = useState<'all' | 'movies' | 'series'>('all');
 
   useEffect(() => {
-    // Simulate loading library items from storage or API
     const loadLibrary = async () => {
       setLoading(true);
-      // Simulate API call delay
-      setTimeout(() => {
-        setLibraryItems(SAMPLE_LIBRARY_ITEMS);
+      try {
+        const items = await catalogService.getLibraryItems();
+        setLibraryItems(items);
+      } catch (error) {
+        console.error('Failed to load library:', error);
+      } finally {
         setLoading(false);
-      }, 1000);
+      }
     };
 
     loadLibrary();
+
+    // Subscribe to library updates
+    const unsubscribe = catalogService.subscribeToLibraryUpdates((items) => {
+      setLibraryItems(items);
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   const filteredItems = libraryItems.filter(item => {

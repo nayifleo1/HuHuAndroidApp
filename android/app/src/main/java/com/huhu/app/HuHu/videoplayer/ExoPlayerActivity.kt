@@ -12,7 +12,9 @@ import android.view.WindowInsetsController
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
+import android.view.WindowManager
+import android.view.LayoutInflater
+import android.view.ViewGroup
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.bundleOf
 import androidx.core.view.WindowCompat
@@ -25,12 +27,21 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.huhu.app.R
 import java.util.HashMap
 import java.util.Locale
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.exoplayer.DefaultLoadControl
+import com.google.android.material.bottomsheet.BottomSheetDialog
+import android.widget.ImageView
+import android.widget.LinearLayout
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 
 class ExoPlayerActivity : AppCompatActivity() {
 
@@ -56,6 +67,10 @@ class ExoPlayerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Keep screen on during video playback
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
         setContentView(R.layout.activity_exo_player)
         
         // Force landscape orientation
@@ -67,29 +82,26 @@ class ExoPlayerActivity : AppCompatActivity() {
         
         playerView = findViewById(R.id.player_view)
         
-        // Configure PlayerView to prevent auto-hiding of controls
-        playerView.controllerShowTimeoutMs = 0 // Prevent auto-hiding of controls
-        playerView.controllerHideOnTouch = false // Don't hide controls on touch
+        // Configure PlayerView with auto-hiding controls
+        playerView.controllerShowTimeoutMs = 3000 // Hide after 3 seconds
+        playerView.controllerHideOnTouch = true // Hide on touch
         playerView.setShowNextButton(false)
         playerView.setShowPreviousButton(false)
         
-        // Override the controller visibility listener to prevent hiding
+        // Override the controller visibility listener
         playerView.setControllerVisibilityListener(androidx.media3.ui.PlayerView.ControllerVisibilityListener { visibility ->
-            // If controller is trying to hide (visibility = GONE), force it to stay visible
-            if (visibility == View.GONE) {
-                // Schedule showing the controller again
-                Handler(Looper.getMainLooper()).post {
-                    playerView.showController()
-                    // Ensure our subtitle button stays visible and enabled
-                    subtitleButton?.apply {
-                        this.visibility = View.VISIBLE
-                        isEnabled = true
-                        alpha = 1.0f
-                        setColorFilter(android.graphics.Color.WHITE)
-                        invalidate()
-                    }
+            // Update button states when controller visibility changes
+            if (visibility == View.VISIBLE) {
+                subtitleButton?.apply {
+                    this.visibility = View.VISIBLE
+                    isEnabled = true
+                    alpha = 1.0f
                 }
-                Log.d(TAG, "Controller tried to hide, forcing it to stay visible")
+                audioButton?.apply {
+                    this.visibility = View.VISIBLE
+                    isEnabled = true
+                    alpha = 1.0f
+                }
             }
         })
         
@@ -192,40 +204,69 @@ class ExoPlayerActivity : AppCompatActivity() {
     private fun initializePlayer(videoUrl: String) {
         // Create a track selector with default parameters
         trackSelector = DefaultTrackSelector(this).apply {
-            // Ensure tracks are not disabled by default and set up subtitle preferences
             setParameters(buildUponParameters()
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                 .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
-                .setPreferredTextLanguage(subtitleLanguage ?: "en")
-                .setSelectUndeterminedTextLanguage(true)  // Select text track even if language is undetermined
-                .setDisabledTextTrackSelectionFlags(0)  // Don't disable any text tracks
-                .setForceHighestSupportedBitrate(true)  // Use highest quality available
+                .setSelectUndeterminedTextLanguage(true)
+                .setDisabledTextTrackSelectionFlags(0)
+                // Optimize initial quality selection
+                .setMaxVideoSize(1280, 720)  // Start with 720p for faster initial load
+                .setMaxVideoBitrate(2000000) // Limit initial bitrate to 2Mbps
+                .setForceHighestSupportedBitrate(false)
+                .setExceedRendererCapabilitiesIfNecessary(true)
+                .setTunnelingEnabled(true)
                 .build())
         }
         
-        // Log track selector parameters
-        Log.d(TAG, "Track selector initialized with parameters: ${trackSelector.parameters}")
-        
-        // Create the player with the track selector
+        // Create the player with optimized settings
         player = ExoPlayer.Builder(this)
             .setTrackSelector(trackSelector)
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(this)
+                    .setLiveMaxOffsetMs(0)  // Minimize live stream latency
+                    .setLiveTargetOffsetMs(0)
+            )
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        2500,   // Minimum buffer (reduced from 10000)
+                        15000,  // Maximum buffer (reduced from 30000)
+                        500,    // Buffer for playback (reduced from 1500)
+                        500     // Buffer for playback after rebuffer (reduced from 1500)
+                    )
+                    .setBackBuffer(0, false) // Disable back buffer
+                    .setPrioritizeTimeOverSizeThresholds(true)
+                    .build()
+            )
+            .setReleaseTimeoutMs(2000)
             .build()
             .also { exoPlayer ->
                 playerView.player = exoPlayer
                 
+                // Set player properties for faster startup
+                exoPlayer.setHandleAudioBecomingNoisy(false) // Disable audio focus handling
+                exoPlayer.setWakeMode(C.WAKE_MODE_NONE) // Disable wake mode
+                
                 // Create media item with headers if needed
                 val mediaItemBuilder = MediaItem.Builder()
                     .setUri(Uri.parse(videoUrl))
+                    // Set live playback optimization
+                    .setLiveConfiguration(
+                        MediaItem.LiveConfiguration.Builder()
+                            .setMaxPlaybackSpeed(1.02f)
+                            .setMinPlaybackSpeed(0.98f)
+                            .setMaxOffsetMs(0)
+                            .setTargetOffsetMs(0)
+                            .build()
+                    )
                 
                 // Add headers if available
                 if (headers.isNotEmpty()) {
-                    // Create a bundle with headers
                     val headerBundle = Bundle()
                     headers.forEach { (key, value) ->
                         headerBundle.putString(key, value)
                     }
                     
-                    // Set request metadata with headers
                     val requestMetadata = MediaItem.RequestMetadata.Builder()
                         .setMediaUri(Uri.parse(videoUrl))
                         .setExtras(headerBundle)
@@ -244,16 +285,15 @@ class ExoPlayerActivity : AppCompatActivity() {
                             .setMimeType(MimeTypes.APPLICATION_SUBRIP)
                             .setLanguage(language)
                             .setLabel(getLanguageDisplayName(language))
-                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_AUTOSELECT)  // Make it default and auto-select
+                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_AUTOSELECT)
                             .build()
                         
                         mediaItemBuilder.setSubtitleConfigurations(listOf(subtitleConfig))
                         hasExternalSubtitles = true
-                        subtitlesEverDetected = true  // Consider external subtitles as detected
+                        subtitlesEverDetected = true
                         
                         Log.d(TAG, "External subtitle added successfully")
                     } catch (e: Exception) {
-                        // If subtitle configuration fails, continue without subtitles
                         Log.e(TAG, "Error adding subtitle: ${e.message}")
                         hasExternalSubtitles = false
                     }
@@ -262,57 +302,56 @@ class ExoPlayerActivity : AppCompatActivity() {
                 val mediaItem = mediaItemBuilder.build()
                 exoPlayer.setMediaItem(mediaItem)
                 
-                exoPlayer.playWhenReady = playWhenReady
+                exoPlayer.playWhenReady = true // Force immediate playback
                 exoPlayer.seekTo(currentItem, playbackPosition)
+                
+                // Add listener for player events
                 exoPlayer.addListener(object : Player.Listener {
-                    override fun onPlaybackStateChanged(playbackState: Int) {
-                        super.onPlaybackStateChanged(playbackState)
-                        if (playbackState == Player.STATE_ENDED) {
-                            finish()
-                        } else if (playbackState == Player.STATE_READY) {
-                            // Check tracks when playback is ready (for debugging only)
-                            val tracks = exoPlayer.currentTracks
-                            logTrackInfo(tracks)
-                            Log.d(TAG, "Playback STATE_READY, track info logged")
-                            
-                            // Update subtitle button immediately when playback is ready
-                            updateSubtitleButtonState(tracks)
-                            
-                            // Keep controls visible
-                            keepControlsVisible()
-                        }
-                    }
-                    
                     override fun onTracksChanged(tracks: Tracks) {
                         super.onTracksChanged(tracks)
-                        // Log track information for debugging
-                        logTrackInfo(tracks)
-                        
-                        // Update subtitle button visibility based on available subtitle tracks
                         updateSubtitleButtonState(tracks)
-                        
-                        // Verify subtitle track selection
-                        verifySubtitleTrackSelection(tracks)
-                        
-                        // Force redraw of the subtitle button to update its appearance
-                        subtitleButton?.invalidate()
+                        logTrackInfo(tracks)
                     }
                     
-                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                        super.onPlayerError(error)
-                        Log.e(TAG, "Player error: ${error.localizedMessage}")
-                        // Even on error, keep subtitle button enabled if we detected subtitles earlier
-                        if (subtitlesEverDetected || hasExternalSubtitles) {
-                            subtitleButton?.apply {
-                                isEnabled = true
-                                visibility = View.VISIBLE
-                                alpha = 1.0f
-                                setColorFilter(android.graphics.Color.WHITE)
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        super.onPlaybackStateChanged(playbackState)
+                        when (playbackState) {
+                            Player.STATE_IDLE -> {
+                                Log.d(TAG, "Playback State: IDLE")
                             }
-                            Log.d(TAG, "Keeping subtitle button enabled despite player error")
+                            Player.STATE_BUFFERING -> {
+                                Log.d(TAG, "Playback State: BUFFERING")
+                                findViewById<View>(R.id.loading_indicator)?.visibility = View.VISIBLE
+                            }
+                            Player.STATE_READY -> {
+                                Log.d(TAG, "Playback State: READY")
+                                findViewById<View>(R.id.loading_indicator)?.visibility = View.GONE
+                                
+                                // Once playback starts, gradually increase quality
+                                trackSelector.setParameters(
+                                    trackSelector.buildUponParameters()
+                                        .setMaxVideoSize(1920, 1080)
+                                        .setMaxVideoBitrate(Integer.MAX_VALUE)
+                                        .build()
+                                )
+                            }
+                            Player.STATE_ENDED -> {
+                                Log.d(TAG, "Playback State: ENDED")
+                                finish()
+                            }
                         }
                     }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        Log.e(TAG, "Player error: ${error.localizedMessage}")
+                        Toast.makeText(this@ExoPlayerActivity, 
+                            "Playback error: ${error.localizedMessage}", 
+                            Toast.LENGTH_LONG).show()
+                        findViewById<View>(R.id.loading_indicator)?.visibility = View.GONE
+                    }
                 })
+                
+                // Prepare and play immediately
                 exoPlayer.prepare()
             }
     }
@@ -370,17 +409,9 @@ class ExoPlayerActivity : AppCompatActivity() {
     private fun getLanguageDisplayName(languageCode: String): String {
         return try {
             val locale = Locale(languageCode)
-            val displayName = locale.getDisplayLanguage(Locale.ENGLISH)
-            
-            // If we got back same as input or empty, it's an invalid code
-            if (displayName == languageCode || displayName.isEmpty()) {
-                "Track ($languageCode)"
-            } else {
-                displayName
-            }
+            locale.getDisplayLanguage(Locale.getDefault()).capitalize(Locale.getDefault())
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting language name: ${e.message}")
-            "Track ($languageCode)"
+            languageCode
         }
     }
     
@@ -436,256 +467,263 @@ class ExoPlayerActivity : AppCompatActivity() {
     private fun showSubtitleOptions() {
         player?.let { exoPlayer ->
             val tracks = exoPlayer.currentTracks
+            val trackGroups = mutableListOf<Tracks.Group>()
+            val trackDescriptions = mutableListOf<TrackOption>()
+            val trackIndices = mutableListOf<Int>()
             
-            // Count all text tracks for subtitles
-            val subtitleTracks = mutableListOf<Pair<Int, Int>>() // Group index, track index
+            // Add "Disabled" option
+            trackDescriptions.add(TrackOption("Off", null))
             
-            tracks.groups.forEachIndexed { groupIndex, group ->
+            // Find current selected track
+            var currentSelectedTrack = -1
+            
+            // Collect all text tracks
+            for (group in tracks.groups) {
                 if (group.type == C.TRACK_TYPE_TEXT) {
-                    for (trackIndex in 0 until group.length) {
-                        subtitleTracks.add(Pair(groupIndex, trackIndex))
-                        // Remember we found subtitles
-                        subtitlesEverDetected = true
-                    }
-                }
-            }
-            
-            // If we ever detected subtitles but they're not present now, force the memory flag
-            if (subtitlesEverDetected && subtitleTracks.isEmpty()) {
-                Log.d(TAG, "No subtitle tracks currently present, but we've detected them before")
-            }
-            
-            // Log subtitle track count for debugging
-            Log.d(TAG, "Subtitle tracks found: ${subtitleTracks.size}, Has external: $hasExternalSubtitles, Ever detected: $subtitlesEverDetected")
-            
-            // Create subtitle options - first option is always "Off"
-            val subtitleOptions = mutableListOf("Off")
-            
-            // Add all found subtitle tracks
-            subtitleTracks.forEachIndexed { index, pair ->
-                val group = tracks.groups[pair.first]
-                val format = group.getTrackFormat(pair.second)
-                val trackName = when {
-                    !format.label.isNullOrEmpty() -> format.label.toString()
-                    !format.language.isNullOrEmpty() -> getLanguageDisplayName(format.language!!)
-                    else -> "Track ${index + 1}"
-                }
-                subtitleOptions.add(trackName)
-                
-                Log.d(TAG, "Found subtitle track: $trackName")
-            }
-            
-            // If we have an external subtitle but no in-stream subtitles, add it as an option
-            if (hasExternalSubtitles) {
-                val displayName = if (subtitleLanguage != null) {
-                    getLanguageDisplayName(subtitleLanguage!!)
-                } else {
-                    "External"
-                }
-                subtitleOptions.add(displayName)
-                Log.d(TAG, "Added external subtitle option: $displayName")
-            }
-            
-            // Determine current selection
-            val parameters = trackSelector.parameters
-            val subtitleDisabled = parameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
-            var selectedIndex = 0 // Default to "Off"
-            
-            if (!subtitleDisabled && (subtitleTracks.isNotEmpty() || hasExternalSubtitles)) {
-                // If subtitles are enabled, select the first option after "Off"
-                selectedIndex = 1
-            }
-            
-            // Prepare dialog message
-            val dialogMessage = if (subtitleOptions.size <= 1) {
-                "No subtitle tracks available for this video"
-            } else {
-                "Select subtitle track:"
-            }
-            
-            Log.d(TAG, "Creating subtitle dialog with ${subtitleOptions.size} options, selected: $selectedIndex")
-            
-            // Show dialog - always show a dialog, even if no subtitles are available
-            val builder = AlertDialog.Builder(this)
-                .setTitle("Subtitles")
-            
-            // If we have options other than just "Off", show a choice dialog
-            if (subtitleOptions.size > 1) {
-                builder.setSingleChoiceItems(
-                    subtitleOptions.toTypedArray(),
-                    selectedIndex
-                ) { dialog, which ->
-                    if (which == 0) {
-                        // Disable subtitles
-                        val newParameters = trackSelector.buildUponParameters()
-                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                            .build()
-                        trackSelector.parameters = newParameters
-                        Log.d(TAG, "Subtitles disabled by user")
-                        Toast.makeText(this, "Subtitles disabled", Toast.LENGTH_SHORT).show()
-                    } else {
-                        // Enable subtitles and select the specific track
-                        try {
-                            val trackIndex = which - 1 // Subtract 1 because first option is "Off"
-                            if (trackIndex < subtitleTracks.size) {
-                                // It's an in-stream subtitle track
-                                val (groupIndex, trackIdx) = subtitleTracks[trackIndex]
-                                val group = tracks.groups[groupIndex]
-                                val format = group.getTrackFormat(trackIdx)
-                                
-                                val newParameters = trackSelector.buildUponParameters()
-                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                                    .setPreferredTextLanguage(format.language)
-                                    .build()
-                                trackSelector.parameters = newParameters
-                                
-                                Log.d(TAG, "Selected in-stream subtitle track: ${format.language}")
-                            } else if (hasExternalSubtitles) {
-                                // It's the external subtitle track
-                                val newParameters = trackSelector.buildUponParameters()
-                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                                    .setPreferredTextLanguage(subtitleLanguage ?: "en")
-                                    .build()
-                                trackSelector.parameters = newParameters
-                                
-                                Log.d(TAG, "Selected external subtitle track")
-                            }
-                            
-                            // Force a tracks refresh by recreating the player
-                            player?.let { currentPlayer ->
-                                val position = currentPlayer.currentPosition
-                                val mediaItem = currentPlayer.currentMediaItem
-                                currentPlayer.release()
-                                initializePlayer(mediaItem?.localConfiguration?.uri.toString())
-                                player?.seekTo(position)
-                            }
-                            
-                            Toast.makeText(this, "Subtitles enabled: ${subtitleOptions[which]}", Toast.LENGTH_SHORT).show()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error selecting subtitle track: ${e.message}")
-                            Toast.makeText(this, "Failed to select subtitle track", Toast.LENGTH_SHORT).show()
+                    for (i in 0 until group.length) {
+                        val format = group.getTrackFormat(i)
+                        
+                        // Build a descriptive name for the track
+                        val language = format.language ?: "unknown"
+                        val languageName = getLanguageDisplayName(language)
+                        val label = format.label
+                        
+                        // Construct track name in format: "Label (Language)" or just "Language" if no label
+                        val trackName = when {
+                            !label.isNullOrEmpty() && label != languageName -> "$label ($languageName)"
+                            else -> languageName
                         }
+                        
+                        // Check if this track is selected
+                        if (group.isTrackSelected(i)) {
+                            currentSelectedTrack = trackDescriptions.size
+                        }
+                        
+                        trackGroups.add(group)
+                        trackIndices.add(i)
+                        trackDescriptions.add(TrackOption(trackName, null))
                     }
-                    dialog.dismiss()
                 }
-            } else {
-                // Just show a message if no subtitle options
-                builder.setMessage(dialogMessage)
-                    .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
             }
             
-            builder.create().show()
+            // Show bottom sheet if we have subtitle options
+            if (trackDescriptions.size > 1 || hasExternalSubtitles) {
+                showTrackSelectionBottomSheet(
+                    getString(R.string.exo_player_subtitles),
+                    trackDescriptions,
+                    currentSelectedTrack
+                ) { selectedIndex ->
+                    if (selectedIndex == 0) {
+                        // Disable subtitles
+                        trackSelector.setParameters(
+                            trackSelector.buildUponParameters()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                                .build()
+                        )
+                    } else {
+                        // Enable selected subtitle track
+                        val selectedGroup = trackGroups[selectedIndex - 1]
+                        val selectedTrackIndex = trackIndices[selectedIndex - 1]
+                        
+                        // Create override for the selected track
+                        trackSelector.setParameters(
+                            trackSelector.buildUponParameters()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                .setOverrideForType(
+                                    TrackSelectionOverride(selectedGroup.mediaTrackGroup, selectedTrackIndex)
+                                )
+                                .build()
+                        )
+                    }
+                }
+            } else {
+                Toast.makeText(this, "No subtitles available", Toast.LENGTH_SHORT).show()
+            }
         }
     }
     
     private fun showAudioTrackOptions() {
         player?.let { exoPlayer ->
             val tracks = exoPlayer.currentTracks
-            val audioTracks = mutableListOf<Pair<Int, Int>>() // Group index, track index
-            val audioOptions = mutableListOf<String>()
+            val trackGroups = mutableListOf<Tracks.Group>()
+            val trackDescriptions = mutableListOf<TrackOption>()
+            val trackIndices = mutableListOf<Int>()
             
-            // Find all audio tracks
-            tracks.groups.forEachIndexed { groupIndex, group ->
+            // Find current selected track
+            var currentSelectedTrack = 0
+            
+            // Collect all audio tracks
+            for (group in tracks.groups) {
                 if (group.type == C.TRACK_TYPE_AUDIO) {
-                    for (trackIndex in 0 until group.length) {
-                        val format = group.getTrackFormat(trackIndex)
+                    for (i in 0 until group.length) {
+                        val format = group.getTrackFormat(i)
                         
-                        // Get more descriptive track name
-                        val trackName = when {
-                            !format.label.isNullOrEmpty() -> format.label.toString()
-                            !format.language.isNullOrEmpty() -> getLanguageDisplayName(format.language!!)
-                            else -> "Track ${audioTracks.size + 1}"
-                        }
+                        // Build a descriptive name for the track
+                        val language = format.language ?: "unknown"
+                        val languageName = getLanguageDisplayName(language)
+                        val label = format.label
                         
-                        val channelCount = format.channelCount
+                        // Get audio properties
                         val bitrate = format.bitrate
+                        val channelCount = format.channelCount
                         
-                        // Add audio quality information
-                        val qualityInfo = StringBuilder()
-                        
-                        // Add channel information
-                        if (channelCount > 0) {
-                            qualityInfo.append(getAudioChannelLabel(channelCount))
+                        // Construct track name with format: "Label (Language) - Quality"
+                        val trackName = buildString {
+                            // Add label and language
+                            if (!label.isNullOrEmpty() && label != languageName) {
+                                append(label)
+                                append(" ($languageName)")
+                            } else {
+                                append(languageName)
+                            }
                         }
                         
-                        // Add bitrate information if available
-                        if (bitrate > 0) {
-                            if (qualityInfo.isNotEmpty()) qualityInfo.append(", ")
-                            qualityInfo.append("${bitrate / 1000} kbps")
+                        // Build quality info
+                        val qualityInfo = buildString {
+                            // Add channel configuration
+                            when (channelCount) {
+                                6 -> append("5.1")
+                                8 -> append("7.1")
+                                2 -> append("Stereo")
+                                1 -> append("Mono")
+                            }
+                            
+                            // Add bitrate if available
+                            if (bitrate > 0) {
+                                if (isNotEmpty()) append(" • ")
+                                append("${bitrate / 1000} kbps")
+                            }
                         }
                         
-                        // Check if it has descriptive audio
-                        val isDescriptive = format.roleFlags and C.ROLE_FLAG_DESCRIBES_VIDEO != 0
-                        if (isDescriptive) {
-                            if (qualityInfo.isNotEmpty()) qualityInfo.append(", ")
-                            qualityInfo.append("Descriptive")
+                        // Check if this track is selected
+                        if (group.isTrackSelected(i)) {
+                            currentSelectedTrack = trackDescriptions.size
                         }
                         
-                        // Combine all information
-                        val label = if (qualityInfo.isNotEmpty()) {
-                            "$trackName ($qualityInfo)"
-                        } else {
-                            trackName
-                        }
-                        
-                        audioOptions.add(label)
-                        audioTracks.add(Pair(groupIndex, trackIndex))
+                        trackGroups.add(group)
+                        trackIndices.add(i)
+                        trackDescriptions.add(TrackOption(trackName, qualityInfo))
                     }
                 }
             }
             
-            // Log audio tracks for debugging
-            Log.d(TAG, "Found ${audioTracks.size} audio tracks for selection")
-            
-            // If no audio tracks, show a message dialog but don't return
-            if (audioTracks.isEmpty()) {
-                AlertDialog.Builder(this)
-                    .setTitle("Audio Tracks")
-                    .setMessage("No additional audio tracks available for this video")
-                    .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
-                    .show()
-                return
-            }
-            
-            // Show dialog with options
-            AlertDialog.Builder(this)
-                .setTitle("Audio Track")
-                .setItems(audioOptions.toTypedArray()) { dialog, which ->
-                    val (groupIndex, trackIndex) = audioTracks[which]
-                    val group = tracks.groups[groupIndex]
+            // Show bottom sheet if we have audio options
+            if (trackDescriptions.isNotEmpty()) {
+                showTrackSelectionBottomSheet(
+                    getString(R.string.exo_player_audio_track),
+                    trackDescriptions,
+                    currentSelectedTrack
+                ) { selectedIndex ->
+                    val selectedGroup = trackGroups[selectedIndex]
+                    val selectedTrackIndex = trackIndices[selectedIndex]
                     
-                    // For Media3, we need to use the track selector to select tracks
-                    try {
-                        // Make sure audio is not disabled but KEEP subtitle settings
-                        // We need to preserve existing parameters for other track types
-                        val currentParameters = trackSelector.parameters
-                        val newParameters = currentParameters.buildUpon()
+                    // Create override for the selected track
+                    trackSelector.setParameters(
+                        trackSelector.buildUponParameters()
                             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
-                            .setPreferredAudioLanguage(group.getTrackFormat(trackIndex).language)
+                            .setOverrideForType(
+                                TrackSelectionOverride(selectedGroup.mediaTrackGroup, selectedTrackIndex)
+                            )
                             .build()
-                        
-                        trackSelector.parameters = newParameters
-                        
-                        Toast.makeText(this, "Selected: ${audioOptions[which]}", Toast.LENGTH_SHORT).show()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error selecting audio track: ${e.message}")
-                        Toast.makeText(this, "Failed to select audio track", Toast.LENGTH_SHORT).show()
-                    }
-                    
-                    dialog.dismiss()
+                    )
                 }
-                .create()
-                .show()
+            } else {
+                Toast.makeText(this, "No audio tracks available", Toast.LENGTH_SHORT).show()
+            }
         }
     }
     
-    private fun getAudioChannelLabel(channelCount: Int): String {
-        return when (channelCount) {
-            1 -> "Mono"
-            2 -> "Stereo"
-            6 -> "5.1"
-            8 -> "7.1"
-            else -> "${channelCount}ch"
+    private data class TrackOption(
+        val name: String,
+        val info: String?
+    )
+    
+    private fun showTrackSelectionBottomSheet(
+        title: String,
+        options: List<TrackOption>,
+        selectedIndex: Int,
+        onOptionSelected: (Int) -> Unit
+    ) {
+        val bottomSheetView = layoutInflater.inflate(R.layout.track_selection_bottom_sheet, null)
+        val bottomSheetDialog = BottomSheetDialog(this, R.style.BottomSheetDialogTheme)
+        
+        // Set up the title
+        bottomSheetView.findViewById<TextView>(R.id.titleText).text = title
+        
+        // Set up the RecyclerView
+        val recyclerView = bottomSheetView.findViewById<RecyclerView>(R.id.recyclerView)
+        recyclerView.layoutManager = LinearLayoutManager(this)
+        
+        // Create and set the adapter
+        val adapter = TrackSelectionAdapter(options, selectedIndex) { index ->
+            onOptionSelected(index)
+            bottomSheetDialog.dismiss()
+        }
+        recyclerView.adapter = adapter
+        
+        // Show the bottom sheet
+        bottomSheetDialog.setContentView(bottomSheetView)
+        
+        // Force expand the bottom sheet when shown
+        bottomSheetDialog.setOnShowListener { dialog ->
+            val d = dialog as BottomSheetDialog
+            val bottomSheet = d.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+            bottomSheet?.let {
+                val behavior = com.google.android.material.bottomsheet.BottomSheetBehavior.from(it)
+                behavior.state = com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_EXPANDED
+                behavior.skipCollapsed = true
+            }
+        }
+        
+        bottomSheetDialog.show()
+    }
+    
+    private class TrackSelectionAdapter(
+        private val options: List<TrackOption>,
+        private var selectedIndex: Int,
+        private val onItemClick: (Int) -> Unit
+    ) : RecyclerView.Adapter<TrackSelectionAdapter.ViewHolder>() {
+        
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+            val view = LayoutInflater.from(parent.context)
+                .inflate(R.layout.track_selection_item, parent, false)
+            return ViewHolder(view)
+        }
+        
+        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+            val option = options[position]
+            holder.bind(option, position == selectedIndex)
+            holder.itemView.setOnClickListener {
+                val previousSelected = selectedIndex
+                selectedIndex = position
+                notifyItemChanged(previousSelected)
+                notifyItemChanged(selectedIndex)
+                onItemClick(position)
+            }
+            holder.itemView.isSelected = position == selectedIndex
+        }
+        
+        override fun getItemCount() = options.size
+        
+        class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+            private val radioButton: ImageView = view.findViewById(R.id.radioButton)
+            private val trackName: TextView = view.findViewById(R.id.trackName)
+            private val trackInfo: TextView = view.findViewById(R.id.trackInfo)
+            
+            fun bind(option: TrackOption, isSelected: Boolean) {
+                itemView.isSelected = isSelected
+                radioButton.isSelected = isSelected
+                trackName.text = option.name
+                trackName.setTextColor(if (isSelected) 0xFF0A84FF.toInt() else 0xFFFFFFFF.toInt())
+                
+                if (option.info != null) {
+                    trackInfo.text = option.info
+                    trackInfo.visibility = View.VISIBLE
+                } else {
+                    trackInfo.visibility = View.GONE
+                }
+            }
         }
     }
     
@@ -745,10 +783,9 @@ class ExoPlayerActivity : AppCompatActivity() {
 
     // Add this method to ensure controls always stay visible
     private fun keepControlsVisible() {
-        // Force controller to be visible
-        playerView.showController()
-        playerView.controllerHideOnTouch = false
-        playerView.controllerShowTimeoutMs = 0
+        // Reset to default controller behavior
+        playerView.controllerHideOnTouch = true
+        playerView.controllerShowTimeoutMs = 3000
     }
 
     private fun verifySubtitleTrackSelection(tracks: Tracks) {
@@ -779,5 +816,11 @@ class ExoPlayerActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Clear the flag when activity is destroyed
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 } 

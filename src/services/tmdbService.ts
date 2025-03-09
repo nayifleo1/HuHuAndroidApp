@@ -255,10 +255,18 @@ export class TMDBService {
    * Stremio IDs for series are typically in the format: tt1234567:1:1 (imdbId:season:episode)
    * or just tt1234567 for the series itself
    */
-  extractTMDBIdFromStremioId(stremioId: string): number | null {
-    // For now, we'll need to search by name since we don't have direct TMDB IDs
-    // In a real implementation, you might want to use an external service to convert IMDB to TMDB IDs
-    return null;
+  async extractTMDBIdFromStremioId(stremioId: string): Promise<number | null> {
+    try {
+      // Extract the base IMDB ID (remove season/episode info if present)
+      const imdbId = stremioId.split(':')[0];
+      
+      // Use the existing findTMDBIdByIMDB function to get the TMDB ID
+      const tmdbId = await this.findTMDBIdByIMDB(imdbId);
+      return tmdbId;
+    } catch (error) {
+      console.error('Failed to extract TMDB ID from Stremio ID:', error);
+      return null;
+    }
   }
 
   /**

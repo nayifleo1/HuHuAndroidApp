@@ -57,6 +57,7 @@ class CatalogService {
   private library: Record<string, StreamingContent> = {};
   private recentContent: StreamingContent[] = [];
   private readonly MAX_RECENT_ITEMS = 20;
+  private librarySubscribers: ((items: StreamingContent[]) => void)[] = [];
 
   private constructor() {
     this.loadLibrary();
@@ -299,22 +300,41 @@ class CatalogService {
     };
   }
 
-  addToLibrary(content: StreamingContent): void {
+  private notifyLibrarySubscribers(): void {
+    const items = Object.values(this.library);
+    this.librarySubscribers.forEach(callback => callback(items));
+  }
+
+  public getLibraryItems(): StreamingContent[] {
+    return Object.values(this.library);
+  }
+
+  public subscribeToLibraryUpdates(callback: (items: StreamingContent[]) => void): () => void {
+    this.librarySubscribers.push(callback);
+    // Initial callback with current items
+    callback(this.getLibraryItems());
+    
+    // Return unsubscribe function
+    return () => {
+      const index = this.librarySubscribers.indexOf(callback);
+      if (index > -1) {
+        this.librarySubscribers.splice(index, 1);
+      }
+    };
+  }
+
+  public addToLibrary(content: StreamingContent): void {
     const key = `${content.type}:${content.id}`;
     this.library[key] = content;
     this.saveLibrary();
+    this.notifyLibrarySubscribers();
   }
 
-  removeFromLibrary(type: string, id: string): void {
+  public removeFromLibrary(type: string, id: string): void {
     const key = `${type}:${id}`;
-    if (this.library[key]) {
-      delete this.library[key];
-      this.saveLibrary();
-    }
-  }
-
-  getLibraryItems(): StreamingContent[] {
-    return Object.values(this.library);
+    delete this.library[key];
+    this.saveLibrary();
+    this.notifyLibrarySubscribers();
   }
 
   private addToRecentContent(content: StreamingContent): void {
