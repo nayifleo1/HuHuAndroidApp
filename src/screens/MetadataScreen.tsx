@@ -193,6 +193,12 @@ const MetadataScreen = () => {
         <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={[
+            styles.loadingText,
+            { color: isDarkMode ? colors.lightGray : colors.mediumGray }
+          ]}>
+            Loading content...
+          </Text>
         </View>
       </SafeAreaView>
     );
@@ -203,21 +209,39 @@ const MetadataScreen = () => {
       <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? colors.darkBackground : colors.white }]}>
         <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <View style={styles.errorContainer}>
-          <MaterialIcons name="error-outline" size={64} color={isDarkMode ? colors.textMuted : colors.mediumGray} />
+          <MaterialIcons 
+            name="error-outline" 
+            size={64} 
+            color={isDarkMode ? colors.textMuted : colors.mediumGray} 
+          />
           <Text style={[styles.errorText, { color: isDarkMode ? colors.text : colors.black }]}>
             {metadataError || 'Content not found'}
           </Text>
           <TouchableOpacity
-            style={styles.retryButton}
+            style={[
+              styles.retryButton,
+              { backgroundColor: colors.primary }
+            ]}
             onPress={loadMetadata}
           >
-            <Text style={styles.retryButtonText}>Retry</Text>
+            <MaterialIcons 
+              name="refresh" 
+              size={20} 
+              color={colors.white}
+              style={{ marginRight: 8 }}
+            />
+            <Text style={styles.retryButtonText}>Try Again</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.backButton}
+            style={[
+              styles.backButton,
+              { borderColor: colors.primary }
+            ]}
             onPress={() => navigation.goBack()}
           >
-            <Text style={[styles.infoButtonText, { color: colors.primary }]}>Go Back</Text>
+            <Text style={[styles.backButtonText, { color: colors.primary }]}>
+              Go Back
+            </Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -412,18 +436,6 @@ const MetadataScreen = () => {
           </Animated.View>
         </ScrollView>
 
-        {/* Back Button */}
-        {lastScrollTop < 50 && (
-          <Animated.View entering={FadeIn.delay(300).springify()}>
-            <TouchableOpacity
-              style={styles.backButton}
-              onPress={() => navigation.goBack()}
-            >
-              <MaterialIcons name="arrow-back" size={24} color="#fff" />
-            </TouchableOpacity>
-          </Animated.View>
-        )}
-
         {/* Full Description Modal */}
         {isFullDescriptionOpen && (
           <Animated.View style={fullDescriptionStyle}>
@@ -464,30 +476,52 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 16,
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    textAlign: 'center',
   },
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: 32,
   },
   errorText: {
-    fontSize: 18,
+    fontSize: 16,
     textAlign: 'center',
     marginTop: 16,
     marginBottom: 24,
+    lineHeight: 24,
   },
   retryButton: {
-    backgroundColor: colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: 24,
     paddingVertical: 12,
-    borderRadius: 8,
-    marginBottom: 12,
+    borderRadius: 24,
+    marginBottom: 16,
   },
   retryButtonText: {
-    color: '#fff',
+    color: colors.white,
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '600',
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 24,
+    borderWidth: 1,
+  },
+  backButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   heroSection: {
     width: '100%',
@@ -656,17 +690,6 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     fontWeight: '600',
     fontSize: 16,
-  },
-  backButton: {
-    position: 'absolute',
-    top: Platform.OS === 'android' ? 35 : 45,
-    left: 16,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   fullDescriptionContainer: {
     flex: 1,

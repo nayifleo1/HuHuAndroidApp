@@ -5,14 +5,15 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  Image,
-  ActivityIndicator,
   useColorScheme,
   useWindowDimensions,
+  SafeAreaView,
+  StatusBar,
+  Animated as RNAnimated,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import { colors } from '../styles/colors';
+import { colors } from '../styles';
 import FastImage from '@d11/react-native-fast-image';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { catalogService } from '../services/catalogService';
@@ -23,6 +24,63 @@ interface LibraryItem extends StreamingContent {
   progress?: number;
   lastWatched?: string;
 }
+
+const SkeletonLoader = () => {
+  const pulseAnim = React.useRef(new RNAnimated.Value(0)).current;
+  const { width } = useWindowDimensions();
+  const itemWidth = (width - 48) / 2;
+
+  React.useEffect(() => {
+    const pulse = RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        RNAnimated.timing(pulseAnim, {
+          toValue: 0,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [pulseAnim]);
+
+  const opacity = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.3, 0.7],
+  });
+
+  const renderSkeletonItem = () => (
+    <View style={[styles.itemContainer, { width: itemWidth }]}>
+      <RNAnimated.View 
+        style={[
+          styles.posterContainer,
+          { opacity, backgroundColor: colors.darkBackground }
+        ]} 
+      />
+      <RNAnimated.View 
+        style={[
+          styles.skeletonTitle,
+          { opacity, backgroundColor: colors.darkBackground }
+        ]} 
+      />
+    </View>
+  );
+
+  return (
+    <View style={styles.skeletonContainer}>
+      {[...Array(6)].map((_, index) => (
+        <View key={index} style={{ width: itemWidth }}>
+          {renderSkeletonItem()}
+        </View>
+      ))}
+    </View>
+  );
+};
 
 const LibraryScreen = () => {
   const navigation = useNavigation();
@@ -71,15 +129,14 @@ const LibraryScreen = () => {
       <TouchableOpacity
         style={[styles.itemContainer, { width: itemWidth }]}
         onPress={() => {
-          // @ts-ignore - We'll fix navigation types later
           navigation.navigate('Metadata', { id: item.id, type: item.type });
         }}
       >
         <View style={styles.posterContainer}>
-          <Image
+          <FastImage
             source={{ uri: item.poster }}
             style={styles.poster}
-            resizeMode="cover"
+            resizeMode={FastImage.resizeMode.cover}
           />
           {item.progress !== undefined && item.progress < 1 && (
             <View style={styles.progressBarContainer}>
@@ -93,18 +150,24 @@ const LibraryScreen = () => {
           )}
           {item.type === 'series' && (
             <View style={styles.badgeContainer}>
-              <Text style={styles.badgeText}>TV</Text>
+              <MaterialIcons
+                name="tv"
+                size={12}
+                color={colors.white}
+                style={{ marginRight: 4 }}
+              />
+              <Text style={styles.badgeText}>Series</Text>
             </View>
           )}
         </View>
         <Text 
-          style={[styles.itemTitle, { color: isDarkMode ? '#FFFFFF' : '#000000' }]}
-          numberOfLines={1}
+          style={[styles.itemTitle, { color: isDarkMode ? colors.white : colors.black }]}
+          numberOfLines={2}
         >
           {item.name}
         </Text>
         {item.lastWatched && (
-          <Text style={styles.lastWatched}>
+          <Text style={[styles.lastWatched, { color: isDarkMode ? colors.lightGray : colors.mediumGray }]}>
             {item.lastWatched}
           </Text>
         )}
@@ -112,21 +175,28 @@ const LibraryScreen = () => {
     );
   };
 
-  const renderFilter = (filterType: 'all' | 'movies' | 'series', label: string) => {
+  const renderFilter = (filterType: 'all' | 'movies' | 'series', label: string, icon: string) => {
     const isActive = filter === filterType;
     return (
       <TouchableOpacity
         style={[
           styles.filterButton,
-          isActive && { backgroundColor: isDarkMode ? '#444444' : '#E0E0E0' }
+          isActive && styles.filterButtonActive,
+          { borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : colors.border }
         ]}
         onPress={() => setFilter(filterType)}
       >
+        <MaterialIcons
+          name={icon}
+          size={20}
+          color={isActive ? colors.primary : (isDarkMode ? colors.lightGray : colors.mediumGray)}
+          style={styles.filterIcon}
+        />
         <Text
           style={[
             styles.filterText,
-            { color: isDarkMode ? '#FFFFFF' : '#000000' },
-            isActive && { fontWeight: 'bold' }
+            isActive && styles.filterTextActive,
+            { color: isDarkMode ? colors.white : colors.black }
           ]}
         >
           {label}
@@ -136,68 +206,55 @@ const LibraryScreen = () => {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: isDarkMode ? '#000000' : '#F5F5F5' }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.black }]}>
+      <StatusBar
+        barStyle="light-content"
+        backgroundColor={colors.black}
+      />
+      
       <View style={styles.header}>
-        <Text style={[styles.headerTitle, { color: isDarkMode ? '#FFFFFF' : '#000000' }]}>
-          Library
-        </Text>
+        <Text style={styles.headerTitle}>Library</Text>
       </View>
 
-      <View style={styles.filterContainer}>
-        {renderFilter('all', 'All')}
-        {renderFilter('movies', 'Movies')}
-        {renderFilter('series', 'Series')}
+      <View style={styles.filtersContainer}>
+        {renderFilter('all', 'All', 'apps')}
+        {renderFilter('movies', 'Movies', 'movie')}
+        {renderFilter('series', 'TV Shows', 'tv')}
       </View>
 
       {loading ? (
-        <Animated.View 
-          entering={FadeIn.duration(300).withInitialValues({ opacity: 0 })}
-          exiting={FadeOut.duration(300)}
-          style={[
-            styles.loadingContainer,
-            { backgroundColor: isDarkMode ? '#000000' : '#F5F5F5' }
-          ]}
-        >
-          <ActivityIndicator size="large" color={colors.primary} />
-        </Animated.View>
+        <SkeletonLoader />
       ) : filteredItems.length === 0 ? (
-        <Animated.View 
-          entering={FadeIn.duration(300).withInitialValues({ opacity: 0 })}
-          exiting={FadeOut.duration(300)}
-          style={[
-            styles.emptyContainer,
-            { backgroundColor: isDarkMode ? '#000000' : '#F5F5F5' }
-          ]}
-        >
-          <MaterialIcons name="video-library" size={64} color={isDarkMode ? '#444444' : '#CCCCCC'} />
-          <Text style={[styles.emptyText, { color: isDarkMode ? '#AAAAAA' : '#777777' }]}>
+        <View style={styles.emptyContainer}>
+          <MaterialIcons 
+            name="video-library" 
+            size={64} 
+            color={isDarkMode ? colors.lightGray : colors.mediumGray}
+          />
+          <Text style={[
+            styles.emptyText,
+            { color: isDarkMode ? colors.white : colors.black }
+          ]}>
             Your library is empty
           </Text>
-          <Text style={[styles.emptySubtext, { color: isDarkMode ? '#888888' : '#999999' }]}>
-            Add items to your library by marking them as favorites in metadata view
+          <Text style={[
+            styles.emptySubtext,
+            { color: isDarkMode ? colors.lightGray : colors.mediumGray }
+          ]}>
+            Add items to your library by marking them as favorites
           </Text>
-        </Animated.View>
+        </View>
       ) : (
-        <Animated.View
-          entering={FadeIn.duration(300).withInitialValues({ opacity: 0 })}
-          exiting={FadeOut.duration(300)}
-          style={{ flex: 1, backgroundColor: isDarkMode ? '#000000' : '#F5F5F5' }}
-        >
-          <FlatList
-            data={filteredItems}
-            renderItem={renderItem}
-            keyExtractor={item => item.id}
-            numColumns={2}
-            contentContainerStyle={[
-              styles.listContent,
-              { backgroundColor: isDarkMode ? '#000000' : '#F5F5F5' }
-            ]}
-            style={{ backgroundColor: isDarkMode ? '#000000' : '#F5F5F5' }}
-            showsVerticalScrollIndicator={false}
-          />
-        </Animated.View>
+        <FlatList
+          data={filteredItems}
+          renderItem={renderItem}
+          keyExtractor={item => item.id}
+          numColumns={2}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+        />
       )}
-    </View>
+    </SafeAreaView>
   );
 };
 
@@ -206,29 +263,49 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    backgroundColor: colors.black,
+    gap: 16,
+  },
+  headerTitle: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: colors.white,
+    letterSpacing: 0.5,
+  },
+  filtersContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 8,
+  },
+  filterButton: {
+    flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.darkGray,
+    backgroundColor: 'transparent',
+    gap: 6,
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+  filterButtonActive: {
+    backgroundColor: colors.primary + '20',
+    borderColor: colors.primary,
   },
-  filterContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    marginBottom: 16,
-  },
-  filterButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    marginRight: 8,
-    borderRadius: 16,
+  filterIcon: {
+    marginRight: 2,
   },
   filterText: {
     fontSize: 14,
+    fontWeight: '500',
+  },
+  filterTextActive: {
+    color: colors.primary,
+    fontWeight: '600',
   },
   listContent: {
     padding: 16,
@@ -239,15 +316,25 @@ const styles = StyleSheet.create({
   },
   posterContainer: {
     position: 'relative',
-    borderRadius: 8,
+    borderRadius: 12,
     overflow: 'hidden',
     aspectRatio: 2/3,
     marginBottom: 8,
-    backgroundColor: 'transparent',
+    backgroundColor: colors.darkBackground,
   },
   poster: {
     width: '100%',
     height: '100%',
+  },
+  itemTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
+    lineHeight: 20,
+  },
+  lastWatched: {
+    fontSize: 12,
+    lineHeight: 16,
   },
   progressBarContainer: {
     position: 'absolute',
@@ -255,7 +342,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 3,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   progressBar: {
     height: '100%',
@@ -265,29 +352,17 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 8,
     right: 8,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   badgeText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: 'bold',
-  },
-  itemTitle: {
-    fontSize: 14,
-    fontWeight: '500',
-    marginBottom: 2,
-  },
-  lastWatched: {
+    color: colors.white,
     fontSize: 12,
-    color: '#888888',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    fontWeight: '600',
   },
   emptyContainer: {
     flex: 1,
@@ -304,6 +379,19 @@ const styles = StyleSheet.create({
   emptySubtext: {
     fontSize: 14,
     textAlign: 'center',
+    lineHeight: 20,
+  },
+  skeletonContainer: {
+    padding: 16,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  skeletonTitle: {
+    height: 20,
+    borderRadius: 4,
+    marginTop: 8,
+    width: '80%',
   },
 });
 

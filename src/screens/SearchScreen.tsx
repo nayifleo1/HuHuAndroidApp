@@ -13,6 +13,7 @@ import {
   Keyboard,
   Dimensions,
   SectionList,
+  Animated as RNAnimated,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -20,13 +21,70 @@ import { colors } from '../styles';
 import { catalogService, StreamingContent } from '../services/catalogService';
 import FastImage from '@d11/react-native-fast-image';
 import debounce from 'lodash/debounce';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeIn, FadeOut, SlideInRight } from 'react-native-reanimated';
 
 const { width } = Dimensions.get('window');
 const POSTER_WIDTH = 90;
 const POSTER_HEIGHT = 135;
+const RECENT_SEARCHES_KEY = 'recent_searches';
+const MAX_RECENT_SEARCHES = 10;
 
 const PLACEHOLDER_POSTER = 'https://placehold.co/300x450/222222/CCCCCC?text=No+Poster';
+
+const SkeletonLoader = () => {
+  const pulseAnim = React.useRef(new RNAnimated.Value(0)).current;
+
+  React.useEffect(() => {
+    const pulse = RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        RNAnimated.timing(pulseAnim, {
+          toValue: 0,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [pulseAnim]);
+
+  const opacity = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.3, 0.7],
+  });
+
+  const renderSkeletonItem = () => (
+    <View style={styles.resultItem}>
+      <RNAnimated.View style={[styles.skeletonPoster, { opacity }]} />
+      <View style={styles.itemDetails}>
+        <RNAnimated.View style={[styles.skeletonTitle, { opacity }]} />
+        <View style={styles.metaRow}>
+          <RNAnimated.View style={[styles.skeletonMeta, { opacity }]} />
+          <RNAnimated.View style={[styles.skeletonMeta, { opacity }]} />
+        </View>
+      </View>
+    </View>
+  );
+
+  return (
+    <View style={styles.skeletonContainer}>
+      {[...Array(5)].map((_, index) => (
+        <View key={index}>
+          {index === 0 && (
+            <RNAnimated.View style={[styles.skeletonSectionHeader, { opacity }]} />
+          )}
+          {renderSkeletonItem()}
+        </View>
+      ))}
+    </View>
+  );
+};
 
 type SearchFilter = 'all' | 'movie' | 'series';
 
@@ -38,6 +96,8 @@ const SearchScreen = () => {
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
   const [activeFilter, setActiveFilter] = useState<SearchFilter>('all');
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const [showRecent, setShowRecent] = useState(true);
 
   // Set navigation options to hide the header
   React.useLayoutEffect(() => {
@@ -46,37 +106,55 @@ const SearchScreen = () => {
     });
   }, [navigation]);
 
-  // Categorize results
-  const categorizedResults = useMemo(() => {
-    if (!results.length) return [];
+  // Load recent searches on mount
+  useEffect(() => {
+    loadRecentSearches();
+  }, []);
 
-    const movieResults = results.filter(item => item.type === 'movie');
-    const seriesResults = results.filter(item => item.type === 'series');
-
-    const sections = [];
-    
-    if (activeFilter === 'all' || activeFilter === 'movie') {
-      if (movieResults.length > 0) {
-        sections.push({
-          title: 'Movies',
-          data: movieResults,
-        });
+  const loadRecentSearches = async () => {
+    try {
+      const savedSearches = await AsyncStorage.getItem(RECENT_SEARCHES_KEY);
+      if (savedSearches) {
+        setRecentSearches(JSON.parse(savedSearches));
       }
+    } catch (error) {
+      console.error('Failed to load recent searches:', error);
+    }
+  };
+
+  const saveRecentSearch = async (searchQuery: string) => {
+    try {
+      const newRecentSearches = [
+        searchQuery,
+        ...recentSearches.filter(s => s !== searchQuery)
+      ].slice(0, MAX_RECENT_SEARCHES);
+      
+      setRecentSearches(newRecentSearches);
+      await AsyncStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(newRecentSearches));
+    } catch (error) {
+      console.error('Failed to save recent search:', error);
+    }
+  };
+
+  // Fuzzy search implementation
+  const fuzzyMatch = (str: string, pattern: string): boolean => {
+    pattern = pattern.toLowerCase();
+    str = str.toLowerCase();
+    
+    let patternIdx = 0;
+    let strIdx = 0;
+    
+    while (patternIdx < pattern.length && strIdx < str.length) {
+      if (pattern[patternIdx] === str[strIdx]) {
+        patternIdx++;
+      }
+      strIdx++;
     }
     
-    if (activeFilter === 'all' || activeFilter === 'series') {
-      if (seriesResults.length > 0) {
-        sections.push({
-          title: 'TV Shows',
-          data: seriesResults,
-        });
-      }
-    }
+    return patternIdx === pattern.length;
+  };
 
-    return sections;
-  }, [results, activeFilter]);
-
-  // Debounced search function
+  // Debounced search function with fuzzy search
   const debouncedSearch = useCallback(
     debounce(async (searchQuery: string) => {
       if (searchQuery.trim().length < 2) {
@@ -87,14 +165,23 @@ const SearchScreen = () => {
 
       try {
         const searchResults = await catalogService.searchContentCinemeta(searchQuery);
-        setResults(searchResults);
+        
+        // Apply fuzzy search on the results
+        const fuzzyResults = searchResults.filter(item => 
+          fuzzyMatch(item.name, searchQuery) ||
+          (item.genres && item.genres.some(genre => fuzzyMatch(genre, searchQuery))) ||
+          (item.year && fuzzyMatch(item.year.toString(), searchQuery))
+        );
+        
+        setResults(fuzzyResults);
+        await saveRecentSearch(searchQuery);
       } catch (error) {
         console.error('Search failed:', error);
         setResults([]);
       } finally {
         setSearching(false);
       }
-    }, 300),
+    }, 200), // Reduced from 300ms to 200ms for better responsiveness
     []
   );
 
@@ -102,10 +189,12 @@ const SearchScreen = () => {
     if (query.trim().length >= 2) {
       setSearching(true);
       setSearched(true);
+      setShowRecent(false);
       debouncedSearch(query);
     } else {
       setResults([]);
       setSearched(false);
+      setShowRecent(true);
     }
   }, [query, debouncedSearch]);
 
@@ -114,6 +203,7 @@ const SearchScreen = () => {
     setResults([]);
     setSearched(false);
     setActiveFilter('all');
+    setShowRecent(true);
   };
 
   const renderSearchFilters = () => {
@@ -156,51 +246,79 @@ const SearchScreen = () => {
     );
   };
 
+  const renderRecentSearches = () => {
+    if (!showRecent || recentSearches.length === 0) return null;
+
+    return (
+      <View style={styles.recentSearchesContainer}>
+        <Text style={[styles.recentSearchesTitle, { color: isDarkMode ? colors.white : colors.black }]}>
+          Recent Searches
+        </Text>
+        {recentSearches.map((search, index) => (
+          <TouchableOpacity
+            key={index}
+            style={styles.recentSearchItem}
+            onPress={() => setQuery(search)}
+          >
+            <MaterialIcons
+              name="history"
+              size={20}
+              color={isDarkMode ? colors.lightGray : colors.mediumGray}
+              style={styles.recentSearchIcon}
+            />
+            <Text style={[
+              styles.recentSearchText,
+              { color: isDarkMode ? colors.white : colors.black }
+            ]}>
+              {search}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    );
+  };
+
   const renderItem = ({ item, index, section }: { item: StreamingContent; index: number; section: { title: string; data: StreamingContent[] } }) => {
     return (
-      <Animated.View
-        entering={SlideInRight.delay(index * 50).springify()}
+      <TouchableOpacity
+        style={[
+          styles.resultItem,
+          { backgroundColor: isDarkMode ? colors.darkBackground : colors.white }
+        ]}
+        onPress={() => {
+          navigation.navigate('Metadata', { id: item.id, type: item.type });
+        }}
       >
-        <TouchableOpacity
-          style={[
-            styles.resultItem,
-            { backgroundColor: isDarkMode ? colors.darkBackground : colors.white }
-          ]}
-          onPress={() => {
-            navigation.navigate('Metadata', { id: item.id, type: item.type });
-          }}
-        >
-          <View style={styles.posterContainer}>
-            <FastImage
-              source={{ uri: item.poster || PLACEHOLDER_POSTER }}
-              style={styles.poster}
-              resizeMode={FastImage.resizeMode.cover}
-            />
-          </View>
+        <View style={styles.posterContainer}>
+          <FastImage
+            source={{ uri: item.poster || PLACEHOLDER_POSTER }}
+            style={styles.poster}
+            resizeMode={FastImage.resizeMode.cover}
+          />
+        </View>
+        
+        <View style={styles.itemDetails}>
+          <Text 
+            style={[styles.itemTitle, { color: isDarkMode ? colors.white : colors.black }]}
+            numberOfLines={2}
+          >
+            {item.name}
+          </Text>
           
-          <View style={styles.itemDetails}>
-            <Text 
-              style={[styles.itemTitle, { color: isDarkMode ? colors.white : colors.black }]}
-              numberOfLines={2}
-            >
-              {item.name}
-            </Text>
-            
-            <View style={styles.metaRow}>
-              {item.year && (
-                <Text style={[styles.yearText, { color: isDarkMode ? colors.lightGray : colors.mediumGray }]}>
-                  {item.year}
-                </Text>
-              )}
-              {item.genres && item.genres.length > 0 && (
-                <Text style={[styles.genreText, { color: isDarkMode ? colors.lightGray : colors.mediumGray }]}>
-                  {item.genres[0]}
-                </Text>
-              )}
-            </View>
+          <View style={styles.metaRow}>
+            {item.year && (
+              <Text style={[styles.yearText, { color: isDarkMode ? colors.lightGray : colors.mediumGray }]}>
+                {item.year}
+              </Text>
+            )}
+            {item.genres && item.genres.length > 0 && (
+              <Text style={[styles.genreText, { color: isDarkMode ? colors.lightGray : colors.mediumGray }]}>
+                {item.genres[0]}
+              </Text>
+            )}
           </View>
-        </TouchableOpacity>
-      </Animated.View>
+        </View>
+      </TouchableOpacity>
     );
   };
 
@@ -214,6 +332,36 @@ const SearchScreen = () => {
       </Text>
     </View>
   );
+
+  // Categorize results
+  const categorizedResults = useMemo(() => {
+    if (!results.length) return [];
+
+    const movieResults = results.filter(item => item.type === 'movie');
+    const seriesResults = results.filter(item => item.type === 'series');
+
+    const sections = [];
+    
+    if (activeFilter === 'all' || activeFilter === 'movie') {
+      if (movieResults.length > 0) {
+        sections.push({
+          title: 'Movies',
+          data: movieResults,
+        });
+      }
+    }
+    
+    if (activeFilter === 'all' || activeFilter === 'series') {
+      if (seriesResults.length > 0) {
+        sections.push({
+          title: 'TV Shows',
+          data: seriesResults,
+        });
+      }
+    }
+
+    return sections;
+  }, [results, activeFilter]);
 
   return (
     <SafeAreaView style={[
@@ -271,15 +419,7 @@ const SearchScreen = () => {
       {renderSearchFilters()}
 
       {searching ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={[
-            styles.loadingText,
-            { color: isDarkMode ? colors.lightGray : colors.mediumGray }
-          ]}>
-            Searching...
-          </Text>
-        </View>
+        <SkeletonLoader />
       ) : searched && categorizedResults.length === 0 ? (
         <View style={styles.emptyContainer}>
           <MaterialIcons 
@@ -301,16 +441,19 @@ const SearchScreen = () => {
           </Text>
         </View>
       ) : (
-        <SectionList
-          sections={categorizedResults}
-          renderItem={renderItem}
-          renderSectionHeader={renderSectionHeader}
-          keyExtractor={item => `${item.type}-${item.id}`}
-          contentContainerStyle={styles.resultsList}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          stickySectionHeadersEnabled={true}
-        />
+        <>
+          {renderRecentSearches()}
+          <SectionList
+            sections={categorizedResults}
+            renderItem={renderItem}
+            renderSectionHeader={renderSectionHeader}
+            keyExtractor={item => `${item.type}-${item.id}`}
+            contentContainerStyle={styles.resultsList}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            stickySectionHeadersEnabled={true}
+          />
+        </>
       )}
     </SafeAreaView>
   );
@@ -466,6 +609,52 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     lineHeight: 20,
+  },
+  skeletonContainer: {
+    padding: 16,
+  },
+  skeletonPoster: {
+    width: POSTER_WIDTH,
+    height: POSTER_HEIGHT,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: colors.darkBackground,
+  },
+  skeletonTitle: {
+    height: 22,
+    marginBottom: 8,
+    backgroundColor: colors.darkBackground,
+  },
+  skeletonMeta: {
+    height: 14,
+    backgroundColor: colors.darkBackground,
+  },
+  skeletonSectionHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+  },
+  recentSearchesContainer: {
+    padding: 16,
+  },
+  recentSearchesTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  recentSearchItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+  },
+  recentSearchIcon: {
+    marginRight: 12,
+  },
+  recentSearchText: {
+    fontSize: 16,
   },
 });
 

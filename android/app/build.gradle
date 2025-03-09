@@ -96,6 +96,10 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+def keystorePropertiesFile = rootProject.file("app/keystore.properties")
+def keystoreProperties = new Properties()
+keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -120,10 +124,10 @@ android {
             keyPassword 'android'
         }
         release {
-            storeFile file('stremio-release-key.keystore')
-            storePassword System.getenv("STREMIO_STORE_PASSWORD")
-            keyAlias System.getenv("STREMIO_KEY_ALIAS")
-            keyPassword System.getenv("STREMIO_KEY_PASSWORD")
+            storeFile file(keystoreProperties['storeFile'])
+            storePassword keystoreProperties['storePassword']
+            keyAlias keystoreProperties['keyAlias']
+            keyPassword keystoreProperties['keyPassword']
         }
     }
     buildTypes {
@@ -169,8 +173,22 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
     
-    // AppCompat dependency
-    implementation("androidx.appcompat:appcompat:1.6.1")
+    // Add libtorrent4j directly for advanced torrent operations
+    implementation("org.libtorrent4j:libtorrent4j:2.0.6-26")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm:2.0.6-26")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm64:2.0.6-26")
+    implementation("org.libtorrent4j:libtorrent4j-android-x86:2.0.6-26")
+    implementation("org.libtorrent4j:libtorrent4j-android-x86_64:2.0.6-26")
+    
+    // Networking and HTTP server
+    implementation("com.squareup.okhttp3:okhttp:4.10.0")
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
+    
+    // AndroidX dependencies using version variables
+    implementation("androidx.appcompat:appcompat:${rootProject.ext.androidXAppcompat}")
+    implementation("androidx.core:core:${rootProject.ext.androidXCore}")
+    implementation("androidx.media:media:${rootProject.ext.androidXMedia}")
+    implementation("androidx.annotation:annotation:${rootProject.ext.androidXAnnotation}")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     
     // Multidex support

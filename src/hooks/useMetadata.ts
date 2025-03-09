@@ -6,6 +6,36 @@ import { tmdbService } from '../services/tmdbService';
 import { cacheService } from '../services/cacheService';
 import { Cast, Episode, GroupedEpisodes, GroupedStreams } from '../types/metadata';
 
+// Constants for timeouts and retries
+const API_TIMEOUT = 10000; // 10 seconds
+const MAX_RETRIES = 2;
+const RETRY_DELAY = 1000; // 1 second
+
+// Utility function to add timeout to promises
+const withTimeout = <T>(promise: Promise<T>, timeout: number): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => 
+      setTimeout(() => reject(new Error('Request timed out')), timeout)
+    )
+  ]);
+};
+
+// Utility function to retry failed requests
+const withRetry = async <T>(
+  fn: () => Promise<T>,
+  retries = MAX_RETRIES,
+  delay = RETRY_DELAY
+): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error) {
+    if (retries === 0) throw error;
+    await new Promise(resolve => setTimeout(resolve, delay));
+    return withRetry(fn, retries - 1, delay);
+  }
+};
+
 interface UseMetadataProps {
   id: string;
   type: string;
@@ -58,6 +88,7 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
   const [preloadedEpisodeStreams, setPreloadedEpisodeStreams] = useState<{ [episodeId: string]: GroupedStreams }>({});
   const [selectedEpisode, setSelectedEpisode] = useState<string | null>(null);
   const [inLibrary, setInLibrary] = useState(false);
+  const [loadAttempts, setLoadAttempts] = useState(0);
 
   const loadCast = async () => {
     try {
@@ -69,16 +100,42 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
         return;
       }
 
-      const tmdbId = await tmdbService.findTMDBIdByIMDB(id);
-      if (tmdbId) {
-        const castData = await tmdbService.getCredits(tmdbId, type);
-        if (castData) {
-          setCast(castData);
-          cacheService.setCast(id, type, castData);
+      // Wrap the entire cast loading in a timeout to ensure it doesn't hang
+      const castLoadingPromise = new Promise<void>(async (resolve) => {
+        try {
+          const tmdbId = await withTimeout(
+            tmdbService.findTMDBIdByIMDB(id),
+            API_TIMEOUT
+          );
+          
+          if (tmdbId) {
+            const castData = await withTimeout(
+              tmdbService.getCredits(tmdbId, type),
+              API_TIMEOUT
+            );
+            
+            if (castData) {
+              setCast(castData);
+              cacheService.setCast(id, type, castData);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to load cast:', error);
+          // Set empty cast array on error to prevent loading state from hanging
+          setCast([]);
         }
-      }
+        resolve();
+      });
+
+      // Ensure cast loading never takes more than 15 seconds total
+      await Promise.race([
+        castLoadingPromise,
+        new Promise<void>(resolve => setTimeout(resolve, 15000))
+      ]);
     } catch (error) {
       console.error('Failed to load cast:', error);
+      // Set empty cast array on error
+      setCast([]);
     } finally {
       setLoadingCast(false);
     }
@@ -86,8 +143,15 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
 
   const loadMetadata = async () => {
     try {
+      if (loadAttempts >= MAX_RETRIES) {
+        setError('Failed to load content after multiple attempts');
+        setLoading(false);
+        return;
+      }
+
       setLoading(true);
       setError(null);
+      setLoadAttempts(prev => prev + 1);
 
       // Check metadata screen cache
       const cachedScreen = cacheService.getMetadataScreen(id, type);
@@ -104,25 +168,38 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
         return;
       }
 
-      // Load content and cast
-      const [content] = await Promise.all([
-        catalogService.getContentDetails(type, id),
-        loadCast()
-      ]);
+      // Load content with timeout and retry
+      const content = await withRetry(async () => {
+        const result = await withTimeout(
+          catalogService.getContentDetails(type, id),
+          API_TIMEOUT
+        );
+        return result;
+      });
 
       if (content) {
         setMetadata(content);
         cacheService.setMetadata(id, type, content);
 
+        // Load cast in parallel but don't wait for it
+        loadCast().catch(console.error);
+
         if (type === 'series') {
           await loadSeriesData();
         }
       } else {
-        setError('Content not found');
+        throw new Error('Content not found');
       }
     } catch (error) {
       console.error('Failed to load metadata:', error);
-      setError('Failed to load content');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load content';
+      setError(errorMessage);
+      
+      // Clear any stale data
+      setMetadata(null);
+      setCast([]);
+      setGroupedEpisodes({});
+      setEpisodes([]);
     } finally {
       setLoading(false);
     }
@@ -171,33 +248,35 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
       console.log('🎬 Starting to load movie streams for:', id);
       setLoadingStreams(true);
       setError(null);
+      setGroupedStreams({}); // Reset streams
 
       // Initialize empty grouped streams
       const newGroupedStreams: GroupedStreams = {};
 
       // Start fetching Stremio streams
       console.log('🔍 Fetching Stremio streams...');
-      const stremioResponses = await stremioService.getStreams(type, id);
-      console.log('✅ Stremio streams response received:', stremioResponses.length, 'addons responded');
-      
-      // Group streams by addon
-      stremioResponses.forEach(response => {
-        const addonId = response.addon;
-        if (addonId) {
-          const streamsWithAddon = response.streams.map(stream => ({
-            ...stream,
-            name: stream.name || stream.title || 'Unnamed Stream',
-            addonId: response.addon,
-            addonName: response.addonName
-          }));
-          
-          if (streamsWithAddon.length > 0) {
-            newGroupedStreams[addonId] = {
-              addonName: response.addonName,
-              streams: streamsWithAddon
-            };
+      const stremioPromise = stremioService.getStreams(type, id).then(responses => {
+        // Process each response as it arrives
+        responses.forEach(response => {
+          const addonId = response.addon;
+          if (addonId) {
+            const streamsWithAddon = response.streams.map(stream => ({
+              ...stream,
+              name: stream.name || stream.title || 'Unnamed Stream',
+              addonId: response.addon,
+              addonName: response.addonName
+            }));
+            
+            if (streamsWithAddon.length > 0) {
+              newGroupedStreams[addonId] = {
+                addonName: response.addonName,
+                streams: streamsWithAddon
+              };
+              // Update streams immediately as they arrive
+              setGroupedStreams({ ...newGroupedStreams });
+            }
           }
-        }
+        });
       });
 
       // Get TMDB ID for external sources
@@ -208,7 +287,7 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
       } else if (id.startsWith('tt')) {
         // This is an IMDB ID
         console.log('📝 Converting IMDB ID to TMDB ID...');
-        tmdbId = await tmdbService.findTMDBIdByIMDB(id);
+        tmdbId = await withTimeout(tmdbService.findTMDBIdByIMDB(id), API_TIMEOUT);
         console.log('✅ Got TMDB ID:', tmdbId);
       } else {
         tmdbId = id;
@@ -219,32 +298,39 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
         throw new Error('Could not get TMDB ID');
       }
 
-      // Fetch external sources in parallel
+      // Fetch external sources in parallel but process them independently
       console.log('🌐 Fetching external streams using TMDB ID:', tmdbId);
-      const [source1Streams, source2Streams] = await Promise.all([
-        fetchExternalStreams(
-          `https://nice-month-production.up.railway.app/embedsu/${tmdbId}`,
-          'Source 1'
-        ),
-        fetchExternalStreams(
-          `https://vidsrc-api-js-phz6.onrender.com/embedsu/${tmdbId}`,
-          'Source 2'
-        )
-      ]);
+      
+      // Source 1
+      const source1Promise = fetchExternalStreams(
+        `https://nice-month-production.up.railway.app/embedsu/${tmdbId}`,
+        'Source 1'
+      ).then(streams => {
+        if (streams.length > 0) {
+          newGroupedStreams['source_1'] = {
+            addonName: 'Source 1',
+            streams
+          };
+          setGroupedStreams({ ...newGroupedStreams });
+        }
+      });
 
-      if (source1Streams.length > 0) {
-        newGroupedStreams['source_1'] = {
-          addonName: 'Source 1',
-          streams: source1Streams
-        };
-      }
+      // Source 2
+      const source2Promise = fetchExternalStreams(
+        `https://vidsrc-api-js-phz6.onrender.com/embedsu/${tmdbId}`,
+        'Source 2'
+      ).then(streams => {
+        if (streams.length > 0) {
+          newGroupedStreams['source_2'] = {
+            addonName: 'Source 2',
+            streams
+          };
+          setGroupedStreams({ ...newGroupedStreams });
+        }
+      });
 
-      if (source2Streams.length > 0) {
-        newGroupedStreams['source_2'] = {
-          addonName: 'Source 2',
-          streams: source2Streams
-        };
-      }
+      // Wait for all sources to complete
+      await Promise.all([stremioPromise, source1Promise, source2Promise]);
 
       // Sort streams by installed addon order
       const installedAddons = stremioService.getInstalledAddons();
@@ -258,7 +344,7 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
         return 0;
       });
       
-      // Create a new object with the sorted keys
+      // Create final sorted streams
       const sortedStreams: GroupedStreams = {};
       sortedKeys.forEach(key => {
         sortedStreams[key] = newGroupedStreams[key];
@@ -283,33 +369,35 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
       console.log('🎬 Starting to load episode streams for:', episodeId);
       setLoadingEpisodeStreams(true);
       setError(null);
+      setEpisodeStreams({}); // Reset streams
 
       // Initialize empty episode streams
       const newGroupedStreams: GroupedStreams = {};
 
       // Start fetching Stremio streams
       console.log('🔍 Fetching Stremio streams...');
-      const stremioResponses = await stremioService.getStreams('series', episodeId);
-      console.log('✅ Stremio streams response received:', stremioResponses.length, 'addons responded');
-      
-      // Group streams by addon
-      stremioResponses.forEach(response => {
-        const addonId = response.addon;
-        if (addonId) {
-          const streamsWithAddon = response.streams.map(stream => ({
-            ...stream,
-            name: stream.name || stream.title || 'Unnamed Stream',
-            addonId: response.addon,
-            addonName: response.addonName
-          }));
-          
-          if (streamsWithAddon.length > 0) {
-            newGroupedStreams[addonId] = {
-              addonName: response.addonName,
-              streams: streamsWithAddon
-            };
+      const stremioPromise = stremioService.getStreams('series', episodeId).then(responses => {
+        // Process each response as it arrives
+        responses.forEach(response => {
+          const addonId = response.addon;
+          if (addonId) {
+            const streamsWithAddon = response.streams.map(stream => ({
+              ...stream,
+              name: stream.name || stream.title || 'Unnamed Stream',
+              addonId: response.addon,
+              addonName: response.addonName
+            }));
+            
+            if (streamsWithAddon.length > 0) {
+              newGroupedStreams[addonId] = {
+                addonName: response.addonName,
+                streams: streamsWithAddon
+              };
+              // Update streams immediately as they arrive
+              setEpisodeStreams({ ...newGroupedStreams });
+            }
           }
-        }
+        });
       });
 
       // Get TMDB ID for external sources
@@ -320,7 +408,7 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
       } else if (id.startsWith('tt')) {
         // This is an IMDB ID
         console.log('📝 Converting IMDB ID to TMDB ID...');
-        tmdbId = await tmdbService.findTMDBIdByIMDB(id);
+        tmdbId = await withTimeout(tmdbService.findTMDBIdByIMDB(id), API_TIMEOUT);
         console.log('✅ Got TMDB ID:', tmdbId);
       } else {
         tmdbId = id;
@@ -335,32 +423,39 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
       const [, season, episode] = episodeId.split(':');
       const episodeQuery = `?s=${season}&e=${episode}`;
 
-      // Fetch external sources in parallel
+      // Fetch external sources in parallel but process them independently
       console.log('🌐 Fetching external streams using TMDB ID:', tmdbId);
-      const [source1Streams, source2Streams] = await Promise.all([
-        fetchExternalStreams(
-          `https://nice-month-production.up.railway.app/embedsu/${tmdbId}${episodeQuery}`,
-          'Source 1'
-        ),
-        fetchExternalStreams(
-          `https://vidsrc-api-js-phz6.onrender.com/embedsu/${tmdbId}${episodeQuery}`,
-          'Source 2'
-        )
-      ]);
+      
+      // Source 1
+      const source1Promise = fetchExternalStreams(
+        `https://nice-month-production.up.railway.app/embedsu/${tmdbId}${episodeQuery}`,
+        'Source 1'
+      ).then(streams => {
+        if (streams.length > 0) {
+          newGroupedStreams['source_1'] = {
+            addonName: 'Source 1',
+            streams
+          };
+          setEpisodeStreams({ ...newGroupedStreams });
+        }
+      });
 
-      if (source1Streams.length > 0) {
-        newGroupedStreams['source_1'] = {
-          addonName: 'Source 1',
-          streams: source1Streams
-        };
-      }
+      // Source 2
+      const source2Promise = fetchExternalStreams(
+        `https://vidsrc-api-js-phz6.onrender.com/embedsu/${tmdbId}${episodeQuery}`,
+        'Source 2'
+      ).then(streams => {
+        if (streams.length > 0) {
+          newGroupedStreams['source_2'] = {
+            addonName: 'Source 2',
+            streams
+          };
+          setEpisodeStreams({ ...newGroupedStreams });
+        }
+      });
 
-      if (source2Streams.length > 0) {
-        newGroupedStreams['source_2'] = {
-          addonName: 'Source 2',
-          streams: source2Streams
-        };
-      }
+      // Wait for all sources to complete
+      await Promise.all([stremioPromise, source1Promise, source2Promise]);
 
       // Sort streams by installed addon order
       const installedAddons = stremioService.getInstalledAddons();
@@ -374,7 +469,7 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
         return 0;
       });
       
-      // Create a new object with the sorted keys
+      // Create final sorted streams
       const sortedStreams: GroupedStreams = {};
       sortedKeys.forEach(key => {
         sortedStreams[key] = newGroupedStreams[key];
@@ -505,6 +600,22 @@ export const useMetadata = ({ id, type }: UseMetadataProps): UseMetadataReturn =
     
     setInLibrary(!inLibrary);
   }, [metadata, inLibrary, type, id]);
+
+  // Reset load attempts when id or type changes
+  useEffect(() => {
+    setLoadAttempts(0);
+  }, [id, type]);
+
+  // Auto-retry on error with delay
+  useEffect(() => {
+    if (error && loadAttempts < MAX_RETRIES) {
+      const timer = setTimeout(() => {
+        loadMetadata();
+      }, RETRY_DELAY * (loadAttempts + 1));
+      
+      return () => clearTimeout(timer);
+    }
+  }, [error, loadAttempts]);
 
   useEffect(() => {
     loadMetadata();

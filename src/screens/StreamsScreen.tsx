@@ -68,17 +68,21 @@ const StreamCard = memo(({ stream, onPress, index }: { stream: Stream; onPress: 
     <Animated.View entering={entering}>
       <TouchableOpacity 
         onPress={onPress} 
-        style={styles.streamCard}
+        style={[
+          styles.streamCard,
+          isTorrent && styles.streamCardDisabled
+        ]}
         activeOpacity={0.7}
+        disabled={isTorrent}
       >
         <View style={styles.streamCardLeft}>
           <View style={styles.streamTypeContainer}>
             <MaterialIcons 
-              name={isTorrent ? 'downloading' : 'play-circle-outline'} 
+              name={isTorrent ? 'block' : 'play-circle-outline'} 
               size={20} 
-              color={colors.text} 
+              color={isTorrent ? colors.error : colors.text} 
             />
-            {isDebrid && (
+            {isDebrid && !isTorrent && (
               <MaterialIcons 
                 name="cloud-done" 
                 size={16} 
@@ -118,15 +122,22 @@ const StreamCard = memo(({ stream, onPress, index }: { stream: Stream; onPress: 
             </View>
 
             {stream.title && (
-              <Text style={styles.sourceText} numberOfLines={1}>
-                {stream.title}
+              <Text style={[
+                styles.sourceText,
+                isTorrent && styles.sourceTextDisabled
+              ]} numberOfLines={1}>
+                {isTorrent ? 'Magnet links are not supported' : stream.title}
               </Text>
             )}
           </View>
         </View>
 
         <View style={styles.streamCardRight}>
-          <MaterialIcons name="play-arrow" size={24} color={colors.text} />
+          <MaterialIcons 
+            name="play-arrow" 
+            size={24} 
+            color={colors.text} 
+          />
         </View>
       </TouchableOpacity>
     </Animated.View>
@@ -193,7 +204,7 @@ const ProviderFilter = memo(({
   );
 });
 
-const StreamsScreen = () => {
+export const StreamsScreen = () => {
   const route = useRoute<RouteProp<RootStackParamList, 'Streams'>>();
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const { id, type, episodeId } = route.params;
@@ -281,19 +292,31 @@ const StreamsScreen = () => {
     );
   }, [selectedEpisode, groupedEpisodes, id]);
 
-  const handlePlayStream = useCallback((stream: Stream) => {
-    VideoPlayerService.playVideo(stream.url, {
-      useExternalPlayer: settings.useExternalPlayer,
-      title: metadata?.name,
-      poster: metadata?.poster,
-      headers: stream.headers,
-      subtitleUrl: stream.subtitles?.[0]?.url,
-      subtitleLanguage: stream.subtitles?.[0]?.lang,
-      episodeTitle: currentEpisode?.name,
-      episodeNumber: currentEpisode?.episodeString,
-      releaseDate: metadata?.released
-    });
-  }, [metadata, currentEpisode, settings.useExternalPlayer]);
+  const handleStreamPress = useCallback(async (stream: Stream) => {
+    try {
+      if (stream.url && !stream.url.startsWith('magnet:')) {
+        // Handle regular streams using VideoPlayerService
+        await VideoPlayerService.playVideo(stream.url, {
+          title: metadata?.name || '',
+          headers: stream.headers,
+          subtitleUrl: stream.subtitles?.[0]?.url,
+          subtitleLanguage: stream.subtitles?.[0]?.lang || 'en',
+          episodeTitle: type === 'series' ? currentEpisode?.name : undefined,
+          episodeNumber: type === 'series' ? 
+            `S${currentEpisode?.season_number.toString().padStart(2, '0')}E${currentEpisode?.episode_number.toString().padStart(2, '0')}` 
+            : undefined,
+          releaseDate: metadata?.released
+        });
+      } else {
+        // Show error for magnet links
+        console.error('Magnet links are not supported');
+        // You might want to show a toast or alert here
+      }
+    } catch (error) {
+      console.error('Stream error:', error);
+      // Handle error (show toast, alert, etc.)
+    }
+  }, [metadata, type, currentEpisode]);
 
   const filterItems = useMemo(() => {
     const installedAddons = stremioService.getInstalledAddons();
@@ -382,10 +405,10 @@ const StreamsScreen = () => {
   const renderItem = useCallback(({ item, index }: { item: Stream; index: number }) => (
     <StreamCard 
       stream={item} 
-      onPress={() => handlePlayStream(item)}
+      onPress={() => handleStreamPress(item)}
       index={index}
     />
-  ), [handlePlayStream]);
+  ), [handleStreamPress]);
 
   const renderSectionHeader = useCallback(({ section }: { section: { title: string } }) => (
     <Animated.View
@@ -424,8 +447,8 @@ const StreamsScreen = () => {
           <ImageBackground
             source={episodeImage ? { uri: episodeImage } : undefined}
             style={styles.streamsHeroBackground}
-            blurRadius={2}
             fadeDuration={0}
+            resizeMode="cover"
           >
             <LinearGradient
               colors={[
@@ -631,6 +654,9 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.05)',
     width: '100%',
   },
+  streamCardDisabled: {
+    backgroundColor: colors.elevation2,
+  },
   streamCardLeft: {
     flex: 1,
     flexDirection: 'row',
@@ -677,6 +703,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textMuted,
     fontStyle: 'italic',
+  },
+  sourceTextDisabled: {
+    color: colors.error,
+    fontStyle: 'normal',
   },
   streamCardRight: {
     width: 40,

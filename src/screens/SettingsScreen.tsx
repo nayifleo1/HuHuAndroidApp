@@ -18,18 +18,6 @@ import { useNavigation } from '@react-navigation/native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { colors } from '../styles/colors';
 import { useSettings, DEFAULT_SETTINGS } from '../hooks/useSettings';
-import Animated, { 
-  FadeIn, 
-  FadeOut, 
-  SlideInRight,
-  withSpring,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-  interpolateColor,
-  interpolate,
-  Extrapolate
-} from 'react-native-reanimated';
 
 const { width } = Dimensions.get('window');
 
@@ -52,74 +40,16 @@ const SettingItem: React.FC<SettingItemProps> = ({
   onPress,
   isDarkMode
 }) => {
-  const pressed = useSharedValue(0);
-  const scale = useSharedValue(1);
-  
-  const animatedStyle = useAnimatedStyle(() => {
-    const backgroundColor = interpolateColor(
-      pressed.value,
-      [0, 1],
-      [
-        isDarkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-        isDarkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)'
-      ]
-    );
-
-    const elevation = interpolate(
-      pressed.value,
-      [0, 1],
-      [1, 4],
-      Extrapolate.CLAMP
-    );
-
-    if (Platform.OS === 'ios') {
-      return {
-        backgroundColor,
-        transform: [{ scale: scale.value }],
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: elevation },
-        shadowOpacity: 0.15,
-        shadowRadius: elevation * 2,
-      };
-    }
-    
-    if (Platform.OS === 'android') {
-      return {
-        backgroundColor,
-        transform: [{ scale: scale.value }],
-        elevation,
-      };
-    }
-
-    return {
-      backgroundColor,
-      transform: [{ scale: scale.value }],
-    };
-  });
-
-  const handlePressIn = () => {
-    pressed.value = withTiming(1, { duration: 150 });
-    scale.value = withSpring(0.98);
-  };
-
-  const handlePressOut = () => {
-    pressed.value = withTiming(0, { duration: 150 });
-    scale.value = withSpring(1);
-  };
-
   return (
-    <Animated.View 
-      entering={SlideInRight.springify()}
+    <View 
       style={[
         styles.settingItem,
         !isLast && styles.settingItemBorder,
-        animatedStyle
+        { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }
       ]}
     >
       <Pressable
         style={styles.settingTouchable}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
         onPress={onPress}
         android_ripple={{ 
           color: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
@@ -144,7 +74,7 @@ const SettingItem: React.FC<SettingItemProps> = ({
           {renderControl()}
         </View>
       </Pressable>
-    </Animated.View>
+    </View>
   );
 };
 
@@ -174,17 +104,14 @@ const SettingsScreen: React.FC = () => {
   }, [updateSetting]);
 
   const renderSectionHeader = (title: string) => (
-    <Animated.View 
-      entering={SlideInRight.springify()}
-      style={styles.sectionHeader}
-    >
+    <View style={styles.sectionHeader}>
       <Text style={[
         styles.sectionHeaderText,
         { color: isDarkMode ? colors.mediumEmphasis : colors.textMutedDark }
       ]}>
         {title}
       </Text>
-    </Animated.View>
+    </View>
   );
 
   const CustomSwitch = ({ value, onValueChange }: { value: boolean, onValueChange: (value: boolean) => void }) => (
@@ -211,9 +138,7 @@ const SettingsScreen: React.FC = () => {
           Settings
         </Text>
       </View>
-      <Animated.ScrollView 
-        entering={FadeIn.duration(300)}
-        exiting={FadeOut.duration(300)}
+      <ScrollView 
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
@@ -340,7 +265,7 @@ const SettingsScreen: React.FC = () => {
           renderControl={() => null}
           isLast={true}
         />
-      </Animated.ScrollView>
+      </ScrollView>
     </SafeAreaView>
   );
 };
@@ -381,7 +306,6 @@ const styles = StyleSheet.create({
     marginVertical: 4,
     borderRadius: 16,
     overflow: Platform.OS === 'android' ? 'hidden' : 'visible',
-    backgroundColor: 'rgba(255,255,255,0.03)',
   },
   settingItemBorder: {
     marginBottom: 8,

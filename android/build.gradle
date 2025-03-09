@@ -6,6 +6,12 @@ buildscript {
         targetSdkVersion = 35
         ndkVersion = "27.1.12297006"
         kotlinVersion = "2.0.21"
+        
+        // Add AndroidX flags
+        androidXAnnotation = "1.7.1"
+        androidXCore = "1.13.1"
+        androidXAppcompat = "1.6.1"
+        androidXMedia = "1.7.0"
     }
     repositories {
         google()
@@ -15,6 +21,31 @@ buildscript {
         classpath("com.android.tools.build:gradle")
         classpath("com.facebook.react:react-native-gradle-plugin")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+    }
+}
+
+// Add this block to force AndroidX
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://jitpack.io" }
+    }
+    
+    configurations.all {
+        resolutionStrategy {
+            force "androidx.core:core:${rootProject.ext.androidXCore}"
+            force "androidx.media:media:${rootProject.ext.androidXMedia}"
+            force "androidx.annotation:annotation:${rootProject.ext.androidXAnnotation}"
+            force "androidx.appcompat:appcompat:${rootProject.ext.androidXAppcompat}"
+            
+            // Exclude old support library
+            exclude group: 'com.android.support'
+            exclude module: 'support-v4'
+            exclude module: 'support-annotations'
+            exclude module: 'support-compat'
+            exclude module: 'support-media-compat'
+        }
     }
 }
 

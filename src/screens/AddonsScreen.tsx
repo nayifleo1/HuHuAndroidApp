@@ -13,19 +13,31 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
-  Image
+  Image,
+  Dimensions,
+  ScrollView
 } from 'react-native';
 import { stremioService, Manifest } from '../services/stremioService';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { colors } from '../styles';
+import FastImage from '@d11/react-native-fast-image';
+
+// Extend Manifest type to include logo
+interface ExtendedManifest extends Manifest {
+  logo?: string;
+}
+
+const { width } = Dimensions.get('window');
 
 const AddonsScreen = () => {
-  const [addons, setAddons] = useState<Manifest[]>([]);
+  const [addons, setAddons] = useState<ExtendedManifest[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [installing, setInstalling] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [addonUrl, setAddonUrl] = useState('');
+  const [addonDetails, setAddonDetails] = useState<ExtendedManifest | null>(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   useEffect(() => {
     loadAddons();
@@ -52,9 +64,28 @@ const AddonsScreen = () => {
 
     try {
       setInstalling(true);
+      // First fetch the addon manifest
+      const manifest = await stremioService.getManifest(addonUrl);
+      setAddonDetails(manifest);
+      setShowAddModal(false);
+      setShowConfirmModal(true);
+    } catch (error) {
+      console.error('Failed to fetch addon details:', error);
+      Alert.alert('Error', 'Failed to fetch addon details');
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  const confirmInstallAddon = async () => {
+    if (!addonDetails) return;
+
+    try {
+      setInstalling(true);
       await stremioService.installAddon(addonUrl);
       setAddonUrl('');
-      setShowAddModal(false);
+      setShowConfirmModal(false);
+      setAddonDetails(null);
       loadAddons();
       Alert.alert('Success', 'Addon installed successfully');
     } catch (error) {
@@ -65,12 +96,12 @@ const AddonsScreen = () => {
     }
   };
 
-  const handleConfigureAddon = (addon: Manifest) => {
+  const handleConfigureAddon = (addon: ExtendedManifest) => {
     // TODO: Implement addon configuration
     Alert.alert('Configure', `Configure ${addon.name}`);
   };
 
-  const handleRemoveAddon = (addon: Manifest) => {
+  const handleRemoveAddon = (addon: ExtendedManifest) => {
     Alert.alert(
       'Uninstall',
       `Are you sure you want to uninstall ${addon.name}?`,
@@ -88,7 +119,7 @@ const AddonsScreen = () => {
     );
   };
 
-  const renderAddonItem = ({ item }: { item: Manifest }) => {
+  const renderAddonItem = ({ item }: { item: ExtendedManifest }) => {
     const types = item.types || [];
     const description = item.description || '';
     // @ts-ignore - some addons might have logo property even though it's not in the type
@@ -183,7 +214,7 @@ const AddonsScreen = () => {
         <MaterialIcons name="add" size={24} color={colors.text} />
       </TouchableOpacity>
 
-      {/* Add Addon Modal */}
+      {/* Add Addon URL Modal */}
       <Modal
         visible={showAddModal}
         transparent
@@ -221,13 +252,103 @@ const AddonsScreen = () => {
                   <ActivityIndicator size="small" color={colors.text} />
                 ) : (
                   <Text style={[styles.modalButtonText, styles.modalButtonTextPrimary]}>
-                    Install
+                    Next
                   </Text>
                 )}
               </TouchableOpacity>
             </View>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Addon Details Confirmation Modal */}
+      <Modal
+        visible={showConfirmModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setShowConfirmModal(false);
+          setAddonDetails(null);
+        }}
+      >
+        <View style={styles.modalContainer}>
+          <View style={[styles.modalContent, styles.confirmModalContent]}>
+            {addonDetails && (
+              <>
+                <View style={styles.addonHeader}>
+                  {/* @ts-ignore - some addons might have logo property even though it's not in the type */}
+                  {addonDetails.logo ? (
+                    <FastImage
+                      source={{ uri: addonDetails.logo }}
+                      style={styles.addonLogo}
+                      resizeMode={FastImage.resizeMode.contain}
+                    />
+                  ) : (
+                    <View style={styles.placeholderLogo}>
+                      <MaterialIcons name="extension" size={48} color={colors.mediumGray} />
+                    </View>
+                  )}
+                  <Text style={styles.addonTitle}>{addonDetails.name}</Text>
+                  <Text style={styles.addonVersion}>Version {addonDetails.version}</Text>
+                </View>
+
+                <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
+                  <View style={styles.addonDetailsSection}>
+                    <Text style={styles.sectionTitle}>Description</Text>
+                    <Text style={styles.addonDescription}>
+                      {addonDetails.description || 'No description available'}
+                    </Text>
+
+                    <Text style={styles.sectionTitle}>Supported Types</Text>
+                    <View style={styles.typeContainer}>
+                      {(addonDetails.types || []).map((type, index) => (
+                        <View key={index} style={styles.typeChip}>
+                          <Text style={styles.typeText}>{type}</Text>
+                        </View>
+                      ))}
+                    </View>
+
+                    {addonDetails.catalogs && addonDetails.catalogs.length > 0 && (
+                      <>
+                        <Text style={styles.sectionTitle}>Catalogs</Text>
+                        <View style={styles.typeContainer}>
+                          {addonDetails.catalogs.map((catalog, index) => (
+                            <View key={index} style={styles.typeChip}>
+                              <Text style={styles.typeText}>{catalog.type}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      </>
+                    )}
+                  </View>
+                </ScrollView>
+
+                <View style={styles.confirmActions}>
+                  <TouchableOpacity
+                    style={[styles.confirmButton, styles.cancelButton]}
+                    onPress={() => {
+                      setShowConfirmModal(false);
+                      setAddonDetails(null);
+                    }}
+                  >
+                    <Text style={styles.confirmButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.confirmButton, styles.installButton]}
+                    onPress={confirmInstallAddon}
+                    disabled={installing}
+                  >
+                    {installing ? (
+                      <ActivityIndicator size="small" color={colors.text} />
+                    ) : (
+                      <Text style={styles.confirmButtonText}>Install</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -303,8 +424,10 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   addonDescription: {
-    color: colors.textMuted,
+    color: colors.mediumEmphasis,
     fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 12,
   },
   addonActions: {
     flexDirection: 'row',
@@ -358,14 +481,16 @@ const styles = StyleSheet.create({
   },
   modalContainer: {
     flex: 1,
-    backgroundColor: colors.transparentDark,
+    backgroundColor: colors.darkBackground,
     justifyContent: 'center',
-    padding: 24,
+    alignItems: 'center',
   },
   modalContent: {
     backgroundColor: colors.elevation1,
     borderRadius: 12,
-    padding: 24,
+    padding: 20,
+    width: '85%',
+    maxWidth: 360,
   },
   modalTitle: {
     color: colors.text,
@@ -400,6 +525,111 @@ const styles = StyleSheet.create({
   },
   modalButtonTextPrimary: {
     color: colors.text,
+  },
+  confirmModalContent: {
+    width: '85%',
+    maxWidth: 360,
+    maxHeight: '80%',
+    padding: 0,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: colors.darkBackground,
+  },
+  addonHeader: {
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.elevation1,
+    backgroundColor: colors.elevation2,
+    width: '100%',
+  },
+  addonLogo: {
+    width: 64,
+    height: 64,
+    marginBottom: 12,
+    borderRadius: 12,
+    backgroundColor: colors.elevation1,
+  },
+  placeholderLogo: {
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+    backgroundColor: colors.elevation1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  addonTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  addonVersion: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginBottom: 0,
+  },
+  addonDetailsSection: {
+    padding: 20,
+  },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.text,
+    marginBottom: 8,
+    marginTop: 12,
+  },
+  typeContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 12,
+    width: '100%',
+  },
+  typeChip: {
+    backgroundColor: colors.elevation2,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.elevation3,
+  },
+  typeText: {
+    color: colors.text,
+    fontSize: 13,
+  },
+  confirmActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    padding: 12,
+    gap: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.elevation1,
+    backgroundColor: colors.elevation2,
+    width: '100%',
+  },
+  confirmButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    minWidth: 90,
+    alignItems: 'center',
+  },
+  cancelButton: {
+    backgroundColor: colors.elevation3,
+  },
+  installButton: {
+    backgroundColor: colors.primary,
+  },
+  confirmButtonText: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  scrollContent: {
+    flexGrow: 1,
   },
 });
 
