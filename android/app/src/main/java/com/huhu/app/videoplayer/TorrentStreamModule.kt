@@ -4,9 +4,11 @@ import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.react.modules.core.RCTNativeAppEventEmitter
 import java.io.File
+import android.util.Log
 
 class TorrentStreamModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
     private val torrentService: TorrentStreamingService = TorrentStreamingService(reactContext)
+    private val TAG = "TorrentStreamModule"
 
     init {
         torrentService.initialize()
@@ -21,9 +23,14 @@ class TorrentStreamModule(reactContext: ReactApplicationContext) : ReactContextB
     }
 
     private fun sendEvent(eventName: String, params: WritableMap?) {
-        reactApplicationContext
-            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-            .emit(eventName, params)
+        try {
+            Log.d(TAG, "Sending event $eventName with params: $params")
+            reactApplicationContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit(eventName, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending event: ${e.message}", e)
+        }
     }
 
     @ReactMethod
@@ -40,20 +47,41 @@ class TorrentStreamModule(reactContext: ReactApplicationContext) : ReactContextB
     fun startStream(magnetUri: String, promise: Promise) {
         try {
             val progressCallback = Callback { progress ->
-                val params = Arguments.createMap().apply {
+                val params = Arguments.createMap()
+                
+                try {
                     if (progress is Map<*, *>) {
-                        progress.forEach { (key, value) ->
-                            when (value) {
-                                is Int -> putInt(key.toString(), value)
-                                is Double -> putDouble(key.toString(), value)
-                                is String -> putString(key.toString(), value)
-                                else -> putString(key.toString(), value.toString())
-                            }
+                        Log.d(TAG, "Progress callback received: $progress")
+                        
+                        // Get each property from the map and add it to params
+                        if (progress.containsKey("bufferProgress")) {
+                            params.putInt("bufferProgress", (progress["bufferProgress"] as? Number)?.toInt() ?: 0)
                         }
+                        
+                        if (progress.containsKey("downloadSpeed")) {
+                            params.putInt("downloadSpeed", (progress["downloadSpeed"] as? Number)?.toInt() ?: 0)
+                        }
+                        
+                        if (progress.containsKey("progress")) {
+                            params.putInt("progress", (progress["progress"] as? Number)?.toInt() ?: 0)
+                        }
+                        
+                        if (progress.containsKey("seeds")) {
+                            params.putInt("seeds", (progress["seeds"] as? Number)?.toInt() ?: 0)
+                        }
+                    } else {
+                        Log.e(TAG, "Progress callback received invalid object: $progress")
                     }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error creating progress event: ${e.message}", e)
                 }
                 
-                sendEvent("torrentProgress", params)
+                if (params.hasKey("bufferProgress") || params.hasKey("downloadSpeed")) {
+                    // Only send the event if we have at least some data
+                    sendEvent("torrentProgress", params)
+                } else {
+                    Log.w(TAG, "Not sending empty progress event")
+                }
             }
 
             torrentService.startStream(magnetUri, promise, progressCallback)

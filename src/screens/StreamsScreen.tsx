@@ -86,93 +86,93 @@ const StreamCard = memo(({ stream, onPress, index, torrentProgress }: {
   // Only disable if it's a torrent that's not debrid and not currently downloading
   const isDisabled = isTorrent && !isDebrid && !torrentProgress && !stream.behaviorHints?.notWebReady;
 
+  // Keep track of downloading status
+  const isDownloading = !!torrentProgress && isTorrent;
+
   return (
     <Animated.View entering={entering}>
       <TouchableOpacity 
-        onPress={handlePress}
         style={[
-          styles.streamCard,
+          styles.streamCard, 
           isDisabled && styles.streamCardDisabled
-        ]}
-        activeOpacity={0.7}
-        disabled={false} // Never disable the TouchableOpacity to allow starting torrent downloads
+        ]} 
+        onPress={handlePress}
+        disabled={isDisabled}
       >
-        <View style={styles.streamCardLeft}>
-          <View style={styles.streamTypeContainer}>
-            {torrentProgress ? (
-              <ActivityIndicator size="small" color={colors.primary} />
-            ) : (
-              <MaterialIcons 
-                name={isTorrent && !isDebrid ? 'download' : 'play-circle-outline'} 
-                size={20} 
-                color={isTorrent && !isDebrid ? colors.textMuted : colors.text} 
-              />
-            )}
-            {isDebrid && !isTorrent && (
-              <MaterialIcons 
-                name="cloud-done" 
-                size={16} 
-                color={colors.success}
-                style={styles.debridIcon}
-              />
-            )}
-          </View>
-
-          <View style={styles.streamContent}>
-            <Text style={styles.streamTitle} numberOfLines={2}>
+        <View style={styles.streamDetails}>
+          <View style={styles.streamNameRow}>
+            <Text style={styles.streamName} numberOfLines={1} ellipsizeMode="tail">
               {displayTitle}
             </Text>
             
-            <View style={styles.primaryTags}>
-              {quality && (
-                <QualityTag text={`${quality}p`} color={colors.info} />
-              )}
-              {isHDR && (
-                <FastImage
-                  source={{ uri: HDR_ICON }}
-                  style={styles.hdrIcon}
-                  resizeMode={FastImage.resizeMode.contain}
-                />
-              )}
-              {isDolby && (
-                <FastImage
-                  source={{ uri: DOLBY_ICON }}
-                  style={styles.dolbyIcon}
-                  tintColor="#ffffff"
-                  resizeMode={FastImage.resizeMode.contain}
-                />
-              )}
-              {size && (
-                <QualityTag text={size} color={colors.darkGray} />
-              )}
-              {torrentProgress && (
-                <QualityTag 
-                  text={`${torrentProgress.bufferProgress}%`} 
-                  color={colors.primary} 
-                />
-              )}
-            </View>
-
-            {stream.title && (
-              <Text style={[
-                styles.sourceText,
-                isTorrent && !isDebrid && !torrentProgress && styles.sourceTextDisabled
-              ]} numberOfLines={1}>
-                {isTorrent && !isDebrid ? (
-                  torrentProgress ? 
-                    `Downloading... ${(torrentProgress.downloadSpeed / (1024 * 1024)).toFixed(2)} MB/s • ${torrentProgress.seeds} seeds` :
-                    'Magnet link - Click to start downloading'
-                ) : stream.title}
-              </Text>
+            {/* Show download indicator for active downloads */}
+            {isDownloading && (
+              <View style={styles.downloadingIndicator}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={styles.downloadingText}>Downloading...</Text>
+              </View>
             )}
           </View>
-        </View>
+          
+          <View style={styles.streamMetaRow}>
+            {quality && (
+              <View style={[styles.chip, { backgroundColor: colors.info }]}>
+                <Text style={styles.chipText}>{quality}p</Text>
+              </View>
+            )}
+            
+            {isHDR && (
+              <View style={[styles.chip, { backgroundColor: colors.success }]}>
+                <Text style={styles.chipText}>HDR</Text>
+              </View>
+            )}
+            
+            {isDolby && (
+              <View style={[styles.chip, { backgroundColor: colors.warning }]}>
+                <Text style={styles.chipText}>DOLBY</Text>
+              </View>
+            )}
+            
+            {size && (
+              <View style={[styles.chip, { backgroundColor: colors.darkGray }]}>
+                <Text style={styles.chipText}>{size}</Text>
+              </View>
+            )}
+            
+            {isTorrent && !isDebrid && (
+              <View style={[styles.chip, { backgroundColor: colors.error }]}>
+                <Text style={styles.chipText}>TORRENT</Text>
+              </View>
+            )}
+            
+            {isDebrid && (
+              <View style={[styles.chip, { backgroundColor: colors.success }]}>
+                <Text style={styles.chipText}>DEBRID</Text>
+              </View>
+            )}
+          </View>
 
-        <View style={styles.streamCardRight}>
+          {/* Render progress bar if there's progress */}
+          {torrentProgress && (
+            <View style={styles.progressContainer}>
+              <View 
+                style={[
+                  styles.progressBar, 
+                  { width: `${torrentProgress.bufferProgress}%` }
+                ]} 
+              />
+              <Text style={styles.progressText}>
+                {`${Math.round(torrentProgress.bufferProgress)}% • ${Math.round(torrentProgress.downloadSpeed / 1024)} KB/s • ${torrentProgress.seeds} seeds`}
+              </Text>
+            </View>
+          )}
+        </View>
+        
+        <View style={styles.streamAction}>
           <MaterialIcons 
-            name={torrentProgress ? 'downloading' : 'play-arrow'} 
+            name="play-arrow" 
             size={24} 
-            color={colors.text} 
+            color={isDisabled ? colors.textMuted : colors.primary} 
           />
         </View>
       </TouchableOpacity>
@@ -186,8 +186,8 @@ const StreamCard = memo(({ stream, onPress, index, torrentProgress }: {
 });
 
 const QualityTag = React.memo(({ text, color }: { text: string; color: string }) => (
-  <View style={[styles.qualityTag, { backgroundColor: color }]}>
-    <Text style={styles.tagText}>{text}</Text>
+  <View style={[styles.chip, { backgroundColor: color }]}>
+    <Text style={styles.chipText}>{text}</Text>
   </View>
 ));
 
@@ -405,19 +405,20 @@ export const StreamsScreen = () => {
     }
   }, [metadata, type, currentEpisode, activeTorrent]);
 
-  // Clean up torrent when video player closes or component unmounts
+  // Clean up torrent when component unmounts
   React.useEffect(() => {
     return () => {
-      console.log('[StreamsScreen] Cleanup effect triggered, stopping torrent');
+      console.log('[StreamsScreen] Component unmounting, cleaning up torrent');
       if (activeTorrent) {
+        console.log('[StreamsScreen] Stopping torrent on unmount');
         torrentService.stopStreamAndWait().catch(error => {
           console.error('[StreamsScreen] Error during cleanup:', error);
         });
-        setActiveTorrent(null);
-        setTorrentProgress({});
+        // We don't need to call setActiveTorrent and setTorrentProgress here
+        // since the component is unmounting anyway
       }
     };
-  }, []);
+  }, []); // Only run this effect once for component mount/unmount
 
   const startTorrentStream = useCallback(async (stream: Stream) => {
     if (!stream.url) return;
@@ -437,25 +438,28 @@ export const StreamsScreen = () => {
       
       const videoPath = await torrentService.startStream(stream.url, {
         onProgress: (progress) => {
+          // Check if progress object is valid and has data
+          if (!progress || Object.keys(progress).length === 0) {
+            console.log('[StreamsScreen] Received empty progress object, ignoring');
+            return;
+          }
+          
           console.log('[StreamsScreen] Torrent progress update:', {
             url: stream.url,
             progress,
             currentTorrentProgress: torrentProgress[stream.url!]
           });
-          setTorrentProgress(prev => ({
-            ...prev,
-            [stream.url!]: progress
-          }));
-
-          // If buffering is complete, start playback
-          if (progress.bufferProgress >= 100) {
-            console.log('[StreamsScreen] Torrent buffering complete, starting playback');
-            setActiveTorrent(null);
-            setTorrentProgress(prev => {
-              const newProgress = { ...prev };
-              delete newProgress[stream.url!];
-              return newProgress;
-            });
+          
+          // Validate progress values before updating state
+          if (typeof progress.bufferProgress === 'number' || 
+              typeof progress.downloadSpeed === 'number' ||
+              typeof progress.progress === 'number' ||
+              typeof progress.seeds === 'number') {
+            
+            setTorrentProgress(prev => ({
+              ...prev,
+              [stream.url!]: progress
+            }));
           }
         }
       });
@@ -463,31 +467,55 @@ export const StreamsScreen = () => {
       console.log('[StreamsScreen] Got video path:', videoPath);
       
       // Once we have the video file path, play it using VideoPlayerService
-      setIsVideoPlaying(true);
-      
-      try {
-        await VideoPlayerService.playVideo(`file://${videoPath}`, {
-          title: metadata?.name || '',
-          episodeTitle: type === 'series' ? currentEpisode?.name : undefined,
-          episodeNumber: type === 'series' ? 
-            `S${currentEpisode?.season_number.toString().padStart(2, '0')}E${currentEpisode?.episode_number.toString().padStart(2, '0')}` 
-            : undefined,
-          releaseDate: metadata?.released
-        });
+      if (videoPath) {
+        setIsVideoPlaying(true);
         
-        // Video player has closed normally
-        console.log('[StreamsScreen] Video playback ended, cleaning up');
-        setIsVideoPlaying(false);
-        
-        // Clean up torrent after video player closes
+        try {
+          // Do NOT stop the torrent stream before playing video
+          // This allows the download to continue during playback
+          
+          // Play the video
+          await VideoPlayerService.playVideo(`file://${videoPath}`, {
+            title: metadata?.name || '',
+            episodeTitle: type === 'series' ? currentEpisode?.name : undefined,
+            episodeNumber: type === 'series' ? 
+              `S${currentEpisode?.season_number.toString().padStart(2, '0')}E${currentEpisode?.episode_number.toString().padStart(2, '0')}` 
+              : undefined,
+            releaseDate: metadata?.released
+          });
+          
+          // Video player has closed normally
+          console.log('[StreamsScreen] Video playback ended, cleaning up');
+          setIsVideoPlaying(false);
+          
+          // Always clean up the torrent after video playback ends
+          console.log('[StreamsScreen] Stopping torrent after playback');
+          await torrentService.stopStreamAndWait();
+          setActiveTorrent(null);
+          setTorrentProgress({});
+          
+        } catch (playerError) {
+          console.error('[StreamsScreen] Video player error:', playerError);
+          setIsVideoPlaying(false);
+          
+          // Also stop the torrent on player error
+          console.log('[StreamsScreen] Stopping torrent after player error');
+          await torrentService.stopStreamAndWait();
+          setActiveTorrent(null);
+          setTorrentProgress({});
+          
+          throw playerError;
+        }
+      } else {
+        // If we didn't get a video path, there's a problem
+        console.error('[StreamsScreen] No video path returned from torrent service');
+        Alert.alert(
+          'Playback Error',
+          'No video file found in torrent'
+        );
         await torrentService.stopStreamAndWait();
         setActiveTorrent(null);
         setTorrentProgress({});
-        
-      } catch (playerError) {
-        console.error('[StreamsScreen] Video player error:', playerError);
-        setIsVideoPlaying(false);
-        throw playerError;
       }
       
     } catch (error) {
@@ -603,14 +631,19 @@ export const StreamsScreen = () => {
     ]
   }));
 
-  const renderItem = useCallback(({ item, index }: { item: Stream; index: number }) => (
-    <StreamCard 
-      stream={item} 
-      onPress={() => handleStreamPress(item)}
-      index={index}
-      torrentProgress={item.url ? torrentProgress[item.url] : undefined}
-    />
-  ), [handleStreamPress, torrentProgress]);
+  const renderItem = useCallback(({ item, index }: { item: Stream; index: number }) => {
+    const stream = item;
+    const progress = torrentProgress[stream.url!];
+    
+    return (
+      <StreamCard 
+        stream={stream} 
+        onPress={() => handleStreamPress(stream)} 
+        index={index}
+        torrentProgress={progress}
+      />
+    );
+  }, [handleStreamPress, torrentProgress]);
 
   const renderSectionHeader = useCallback(({ section }: { section: { title: string } }) => (
     <Animated.View
@@ -859,65 +892,65 @@ const styles = StyleSheet.create({
   streamCardDisabled: {
     backgroundColor: colors.elevation2,
   },
-  streamCardLeft: {
+  streamDetails: {
     flex: 1,
+  },
+  streamNameRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     width: '100%',
   },
-  streamTypeContainer: {
-    marginRight: 12,
-    position: 'relative',
-  },
-  debridIcon: {
-    position: 'absolute',
-    right: -6,
-    bottom: -6,
-  },
-  streamContent: {
-    flex: 1,
-  },
-  streamTitle: {
+  streamName: {
     fontSize: 14,
     fontWeight: '600',
     marginBottom: 6,
     lineHeight: 20,
     color: colors.highEmphasis,
   },
-  primaryTags: {
+  streamMetaRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 4,
     marginBottom: 6,
     alignItems: 'center',
   },
-  qualityTag: {
+  chip: {
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 4,
+    marginRight: 4,
+    marginBottom: 4,
   },
-  tagText: {
+  chipText: {
     color: colors.highEmphasis,
     fontSize: 12,
     fontWeight: '600',
   },
-  sourceText: {
+  progressContainer: {
+    height: 20,
+    backgroundColor: colors.transparentLight,
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginBottom: 6,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: colors.primary,
+  },
+  progressText: {
+    color: colors.highEmphasis,
     fontSize: 12,
-    color: colors.textMuted,
-    fontStyle: 'italic',
+    fontWeight: '600',
+    marginLeft: 8,
   },
-  sourceTextDisabled: {
-    color: colors.error,
-    fontStyle: 'normal',
-  },
-  streamCardRight: {
+  streamAction: {
     width: 40,
     height: 40,
     borderRadius: 20,
     backgroundColor: colors.elevation2,
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: 12,
   },
   skeletonCard: {
     opacity: 0.7,
@@ -1053,15 +1086,20 @@ const styles = StyleSheet.create({
     marginTop: 12,
     textAlign: 'center',
   },
-  hdrIcon: {
-    width: 36,
-    height: 16,
-    marginRight: 4,
+  downloadingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.transparentLight,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+    marginLeft: 8,
   },
-  dolbyIcon: {
-    width: 46,
-    height: 16,
-    marginRight: 4,
+  downloadingText: {
+    color: colors.primary,
+    fontSize: 12,
+    marginLeft: 4,
+    fontWeight: '600',
   },
 });
 

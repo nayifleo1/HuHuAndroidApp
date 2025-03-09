@@ -108,6 +108,12 @@ class TorrentService {
           TorrentService.TORRENT_PROGRESS_EVENT,
           (progress) => {
             console.log('[TorrentService] Progress event received:', progress);
+            
+            // Update cache mapping if download is complete
+            if (progress.progress >= 100) {
+              console.log('[TorrentService] Download complete, adding to cache');
+            }
+            
             if (events.onProgress) {
               events.onProgress(progress);
             }
@@ -118,12 +124,15 @@ class TorrentService {
       }
 
       // Start the stream
+      console.log('[TorrentService] Starting torrent stream');
       const filePath = await TorrentStreamModule.startStream(magnetUri);
       
-      // Cache the file path for future use
-      this.cachedTorrents.set(magnetUri, filePath);
-      await this.saveCache();
-      console.log('[TorrentService] Cached new torrent file:', filePath);
+      // Save to cache
+      if (filePath) {
+        console.log('[TorrentService] Adding path to cache:', filePath);
+        this.cachedTorrents.set(magnetUri, filePath);
+        await this.saveCache();
+      }
       
       return filePath;
     } catch (error) {

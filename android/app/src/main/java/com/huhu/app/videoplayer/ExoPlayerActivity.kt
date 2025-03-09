@@ -759,15 +759,29 @@ class ExoPlayerActivity : AppCompatActivity() {
         super.onResume()
         hideSystemUi()
         keepControlsVisible()
+        
+        // Resume playback if the player was released
+        if (player == null && playbackPosition > 0) {
+            initializePlayer(intent.getStringExtra("VIDEO_URL") ?: "")
+            player?.seekTo(currentItem, playbackPosition)
+        }
     }
 
     override fun onPause() {
         super.onPause()
-        releasePlayer()
+        // Save playback state but don't release the player
+        // This allows background playback to continue
+        player?.let { exoPlayer ->
+            playbackPosition = exoPlayer.currentPosition
+            currentItem = exoPlayer.currentMediaItemIndex
+            playWhenReady = exoPlayer.playWhenReady
+        }
     }
 
     override fun onStop() {
         super.onStop()
+        // Only release the player when the activity is actually stopping
+        // Not when it's just going to the background
         releasePlayer()
     }
 

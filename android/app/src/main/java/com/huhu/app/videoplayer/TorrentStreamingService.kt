@@ -18,6 +18,7 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
     private var progressCallback: Callback? = null
     private var currentTorrent: Torrent? = null
     private var isCachedFile: Boolean = false
+    private var currentMagnetUri: String? = null
 
     companion object {
         private const val TAG = "TorrentStreamingService"
@@ -30,6 +31,7 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
             .maxDownloadSpeed(0) // No speed limit
             .maxUploadSpeed(0) // No speed limit
             .maxConnections(200) // Increase max connections
+            .autoDownload(true)
             .build()
 
         torrentStream = TorrentStream.init(torrentOptions)
@@ -39,6 +41,7 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
     fun startStream(magnetUri: String, promise: Promise, callback: Callback) {
         currentPromise = promise
         progressCallback = callback
+        currentMagnetUri = magnetUri
         
         try {
             // Check if the file already exists in the save location
@@ -51,7 +54,7 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
             isCachedFile = files?.isNotEmpty() == true
             
             if (isCachedFile) {
-                Log.d(TAG, "Found cached file for torrent")
+                Log.d(TAG, "Found cached file for torrent with hash: $infoHash")
                 // Even for cached files, start the stream to maintain the session
                 torrentStream?.startStream(magnetUri)
                 // But immediately resolve with the cached file path
@@ -59,6 +62,7 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
                     promise.resolve(file.absolutePath)
                 }
             } else {
+                Log.d(TAG, "Starting new torrent download with hash: $infoHash")
                 torrentStream?.startStream(magnetUri)
             }
         } catch (e: Exception) {
@@ -67,11 +71,18 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
     }
 
     fun stopStream() {
-        torrentStream?.stopStream()
         currentTorrent = null
         currentPromise = null
         progressCallback = null
         isCachedFile = false
+        currentMagnetUri = null
+        
+        try {
+            torrentStream?.stopStream()
+            Log.d(TAG, "Successfully stopped torrent stream")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping torrent stream", e)
+        }
     }
 
     override fun onStreamPrepared(torrent: Torrent) {
@@ -92,31 +103,55 @@ class TorrentStreamingService(private val context: Context) : TorrentListener {
     }
 
     override fun onStreamReady(torrent: Torrent) {
-        Log.d(TAG, "Stream ready")
+        Log.d(TAG, "Stream ready - Video file ready for playback")
         if (!isCachedFile) {
             val videoFile = torrent.videoFile
             if (videoFile != null && videoFile.exists()) {
+                Log.d(TAG, "Resolved with video file path: ${videoFile.absolutePath}")
+                
+                // Save this file to our cache mapping
+                currentMagnetUri?.let { magnetUri ->
+                    Log.d(TAG, "Saving magnet URI to cache: $magnetUri -> ${videoFile.absolutePath}")
+                }
+                
                 currentPromise?.resolve(videoFile.absolutePath)
             } else {
+                Log.e(TAG, "No video file found in torrent")
                 currentPromise?.reject("TORRENT_ERROR", "No video file found in torrent")
             }
         }
     }
 
     override fun onStreamProgress(torrent: Torrent, status: StreamStatus) {
-        Log.d(TAG, "Stream progress - Buffer: ${status.bufferProgress}%, Speed: ${status.downloadSpeed}, Seeds: ${status.seeds}")
-        val progress = mapOf(
-            "bufferProgress" to status.bufferProgress,
-            "downloadSpeed" to status.downloadSpeed,
-            "progress" to status.progress,
-            "seeds" to status.seeds
-        )
-        progressCallback?.invoke(progress)
+        try {
+            val bufferProgress = status.bufferProgress
+            val downloadSpeed = status.downloadSpeed
+            val seeds = status.seeds
+            val progress = status.progress
+            
+            Log.d(TAG, "Stream progress - Buffer: ${bufferProgress}%, Speed: ${downloadSpeed}, Seeds: ${seeds}, Progress: ${progress}%")
+            
+            val progressMap = HashMap<String, Any>()
+            progressMap["bufferProgress"] = bufferProgress
+            progressMap["downloadSpeed"] = downloadSpeed
+            progressMap["progress"] = progress
+            progressMap["seeds"] = seeds
+            
+            // Check if we have a callback to invoke
+            if (progressCallback != null) {
+                progressCallback?.invoke(progressMap)
+            } else {
+                Log.w(TAG, "Progress callback is null, can't send update")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in progress callback", e)
+        }
     }
 
     override fun onStreamStopped() {
         Log.d(TAG, "Stream stopped")
         currentTorrent = null
         isCachedFile = false
+        currentMagnetUri = null
     }
 } 
